@@ -15,7 +15,7 @@ import skvideo.io
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
-parser.add_argument('--temp', type=float, default=0.1)
+parser.add_argument('--temp', type=float, default=1)
 parser.add_argument('--first_episode', type=int, default=0)
 parser.add_argument('--num_episodes', type=int, default=10000)
 parser.add_argument('--traceback', type=int, default=100)
@@ -70,7 +70,7 @@ def train(episode):
         if not done:
             with torch.no_grad():
                 log_probs = net(torch.tensor(np.expand_dims(observation, 0)))
-            distr = D.Categorical(logits = log_probs[0] + args.temp)
+            distr = D.Categorical(logits = log_probs[0] / args.temp)
             action = distr.sample()
 
             if render:
