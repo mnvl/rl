@@ -70,7 +70,7 @@ def train(episode):
         if not done:
             with torch.no_grad():
                 log_probs = net(torch.tensor(np.expand_dims(observation, 0)))
-            distr = D.Categorical(logits = log_probs[0] / args.temp)
+            distr = D.Categorical(probs = torch.exp(log_probs[0] / args.temp))
             action = distr.sample()
 
             if render:
