@@ -1,4 +1,5 @@
 
+import gc
 import random
 import argparse
 
@@ -18,11 +19,11 @@ parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
 parser.add_argument('--temp', type=float, default=1)
 parser.add_argument('--first_episode', type=int, default=0)
 parser.add_argument('--num_episodes', type=int, default=10000)
-parser.add_argument('--traceback', type=int, default=100)
-parser.add_argument('--gamma', type=float, default=0.9)
+parser.add_argument('--gamma', type=float, default=0.95)
 parser.add_argument('--lr', type=float, default=0.001)
-parser.add_argument('--epsilon', type=float, default=0.1)
+parser.add_argument('--epsilon', type=float, default=0.2)
 parser.add_argument('--batch_size', type=int, default=256)
+parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
 
 args = parser.parse_args()
@@ -56,7 +57,7 @@ class Net(nn.Module):
 
 net = Net()
 net = net.cuda()
-optimizer = optim.Adam(net.parameters(), lr=0.0001, weight_decay=1e-7)
+optimizer = optim.Adam(net.parameters(), lr=0.01, weight_decay=0.001)
 
 replay_memory = []
 
@@ -65,30 +66,42 @@ def train(episode):
 
     images = []
 
-    render = (episode % 10 == 0)
+    render = (episode % 100 == 0)
 
     observation = env.reset()
     done = False
 
+    sum_rewards = 0.0
     sum_loss = 0.0
 
     while not done:
-        if random.random() < args.epsilon:
-            action = int(random.randint(0, env.action_space.n-1))
-        else:
-            with torch.no_grad():
-                qi = net(torch.tensor(np.expand_dims(observation, 0)))
-            action = int(np.argmax(qi.cpu().numpy()[0]))
+        for i in range(args.batch_size // 2):
+            if random.random() < args.epsilon:
+                action = int(random.randint(0, env.action_space.n-1))
+            else:
+                with torch.no_grad():
+                    qi = net(torch.tensor(np.expand_dims(observation, 0)))
+                action = int(np.argmax(qi.cpu().numpy()[0]))
 
-        if render:
-            images.append(np.expand_dims(env.render(mode="rgb_array"), axis=0))
+            if render:
+                image = env.render(mode="rgb_array")
+                image = image.copy()
+                image = np.expand_dims(image, axis=0)
+                images.append(image)
 
-        new_observation, reward, done, info = env.step(action)
+            new_observation, reward, done, info = env.step(action)
+            sum_rewards += reward
 
-        if len(replay_memory) > args.replay_memory_size:
-            replay_memory = replay_memory[1:]
+            if len(replay_memory) > args.replay_memory_size:
+                replay_memory = replay_memory[1:]
 
-        replay_memory.append((observation, action, reward, new_observation))
+            replay_memory.append((observation.copy(), int(action), float(reward), new_observation.copy()))
+
+            if done:
+                break
+
+        if len(replay_memory) < args.min_replay_memory_size:
+            continue
 
         batch = [random.choice(replay_memory) for i in range(args.batch_size)]
         X = []
@@ -115,13 +128,13 @@ def train(episode):
         Qi = Qi[range(args.batch_size), torch.tensor(actions)]
 
         y = torch.tensor(y).cuda()
-        loss = (Qi - y)**2
+        loss = torch.square(Qi - y)
         loss = torch.mean(loss)
+
+        sum_loss += float(loss.detach().cpu())
 
         loss.backward()
         optimizer.step()
-
-        sum_loss += float(loss.detach().cpu())
 
     if render:
         filename = "episode_%06d.mp4" % episode
@@ -132,15 +145,16 @@ def train(episode):
 
         print("wrote %s from %s" % (filename, str(images.shape)))
 
-    return sum_loss
+    return sum_loss, sum_rewards
 
 ###
 if args.first_episode > 0:
     net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
 for episode in range(args.first_episode, args.num_episodes):
-    loss = train(episode)
-    print("episode %6d, loss = %3.6f" % (episode, loss))
+    loss, reward = train(episode)
 
-    if episode % 10 == 0:
+    print("episode %6d, loss = %3.6f, reward = %3.6f, rm = %d, gc = %s" % (episode, loss, reward, len(replay_memory), gc.collect()))
+
+    if episode % 100 == 0:
         torch.save(net.state_dict(), "episode_%06d" % episode)
