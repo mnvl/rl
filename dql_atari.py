@@ -23,6 +23,7 @@ parser.add_argument('--gamma', type=float, default=0.9)
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--epsilon', type=float, default=0.1)
 parser.add_argument('--batch_size', type=int, default=256)
+parser.add_argument('--replay_memory_size', type=int, default=100000)
 
 args = parser.parse_args()
 
@@ -60,6 +61,8 @@ optimizer = optim.Adam(net.parameters(), lr=0.0001, weight_decay=1e-7)
 replay_memory = []
 
 def train(episode):
+    global replay_memory
+
     images = []
 
     render = (episode % 10 == 0)
@@ -81,6 +84,9 @@ def train(episode):
             images.append(np.expand_dims(env.render(mode="rgb_array"), axis=0))
 
         new_observation, reward, done, info = env.step(action)
+
+        if len(replay_memory) > args.replay_memory_size:
+            replay_memory = replay_memory[1:]
 
         replay_memory.append((observation, action, reward, new_observation))
 
