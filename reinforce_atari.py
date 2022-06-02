@@ -30,12 +30,12 @@ class Net(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 8, 5, 3)
-        self.conv2 = nn.Conv2d(8, 16, 5, 3)
-        self.conv3 = nn.Conv2d(16, 32, 5, 3)
-        self.conv4 = nn.Conv2d(32, 64, 5, 3)
-        self.conv5 = nn.Conv2d(64, 128, 5, 3)
-        self.conv6 = nn.Conv2d(128, 256, 5, 3)
-        self.linear1 = nn.Linear(2560, 100)
+        self.conv2 = nn.Conv2d(8, 16, 3, 2)
+        self.conv3 = nn.Conv2d(16, 32, 3, 2)
+        self.conv4 = nn.Conv2d(32, 64, 3, 2)
+        self.conv5 = nn.Conv2d(64, 128, 3, 2)
+        self.conv6 = nn.Conv2d(128, 256, 3, 2)
+        self.linear1 = nn.Linear(768, 100)
         self.fc = nn.Linear(100, env.action_space.n)
 
     def forward(self, x):
