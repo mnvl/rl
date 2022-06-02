@@ -29,21 +29,22 @@ env = gym.make(args.env)
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 8, 2)
-        self.conv2 = nn.Conv2d(8, 16, 2)
-        self.conv3 = nn.Conv2d(16, 24, 2)
-        self.conv4 = nn.Conv2d(24, 30, 2)
-        self.conv5 = nn.Conv2d(30, 36, 2)
-        self.linear1 = nn.Linear(720, 100)
+        self.conv1 = nn.Conv2d(3, 8, 5, 3)
+        self.conv2 = nn.Conv2d(8, 16, 5, 3)
+        self.conv3 = nn.Conv2d(16, 32, 5, 3)
+        self.conv4 = nn.Conv2d(32, 64, 5, 3)
+        self.conv5 = nn.Conv2d(64, 128, 5, 3)
+        self.conv6 = nn.Conv2d(128, 256, 5, 3)
+        self.linear1 = nn.Linear(2560, 100)
         self.fc = nn.Linear(100, env.action_space.n)
 
     def forward(self, x):
         x = x.swapdims(1, 3).type(torch.FloatTensor).cuda()
-        x = F.max_pool2d(F.relu(self.conv1(x)), 2)
-        x = F.max_pool2d(F.relu(self.conv2(x)), 2)
-        x = F.max_pool2d(F.relu(self.conv3(x)), 2)
-        x = F.max_pool2d(F.relu(self.conv4(x)), 2)
-        x = F.max_pool2d(F.relu(self.conv5(x)), 2)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = F.relu(self.conv5(x))
         x = x.reshape((1, -1))
         x = F.relu(self.linear1(x))
         x = self.fc(x)
@@ -55,8 +56,6 @@ net = net.cuda()
 optimizer = optim.Adam(net.parameters(), lr=0.0001, weight_decay=1e-7)
 
 def train(episode):
-    optimizer.zero_grad()
-
     images = []
     history = []
     observation = env.reset()
@@ -82,6 +81,8 @@ def train(episode):
 
 
         if len(history)>args.traceback or done:
+            optimizer.zero_grad()
+
             loss = 0.0
     
             G = 0.0
