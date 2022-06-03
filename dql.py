@@ -1,4 +1,5 @@
 
+import os
 import gc
 import random
 import argparse
@@ -28,7 +29,10 @@ parser.add_argument('--batch_size', type=int, default=20)
 parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
 
-args = parser.parse_args()
+if __name__ == '__main__':
+    args = parser.parse_args()
+else:
+    args = parser.parse_args("")
 
 
 class AtariNet(nn.Module):
@@ -72,16 +76,12 @@ class DQL:
 
     def select_action(self, epsilon=args.epsilon):
         if random.random() < args.epsilon:
-            action = int(random.randint(0, self.env.action_space.n-1))
-        else:
-            X = np.expand_dims(self.observation, 0)
-
-            with torch.no_grad():
-                Q = self.net(torch.tensor(X, device=self.device))
-
-            action = int(np.argmax(Q.cpu().numpy()[0]))
-
-        return action
+            return int(random.randint(0, self.env.action_space.n-1))
+        
+        X = np.expand_dims(self.observation, 0)
+        with torch.no_grad():
+            Q = self.net(torch.tensor(X, device=self.device))
+        return int(np.argmax(Q.cpu().numpy()[0]))
 
     def render_frame(self):
         image = self.env.render(mode="rgb_array")
@@ -226,7 +226,7 @@ class MockEnv:
         return observation, reward, self.done, None
 
 
-class TestDQN(unittest.TestCase):
+class TestDQL(unittest.TestCase):
     def test_select_action(self):
         class Net(nn.Module):
             def __init__(self):
@@ -320,10 +320,12 @@ class TestDQN(unittest.TestCase):
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
     def test_train_cartpole(self):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        
         saved_lr = args.lr
         saved_epsilon = args.epsilon
 
-        args.lr = 0.001
+        args.lr = 0.0005
 
         env = gym.make("CartPole-v1")
 
@@ -336,16 +338,22 @@ class TestDQN(unittest.TestCase):
 
         trainer = DQL(env, net)
 
-        for i in range(1000):
-            if i > 990:
+        num_episodes = 2000
+        for i in range(num_episodes):
+            magic = (i > num_episodes - 5)
+            
+            if magic:
                 args.epsilon = 0
 
-            rewards, loss = trainer.train()
-            if i % 100 == 0:
-                print("cartpole", rewards, loss)
+            rewards, loss = trainer.train(render=magic)
+
+            if i % 100 == 0 or magic:
+                print("cartpole", i, rewards, loss)
 
         args.lr = saved_lr
         args.epsilon = saved_epsilon
+
+        trainer.write_video(999999)
 
         self.assertGreater(rewards, 200)
 
