@@ -273,6 +273,8 @@ class TestDQN(unittest.TestCase):
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
     def test_train_randomized(self):
+        saved_lr = args.lr
+
         args.lr = 0.01
 
         env = MockEnv(randomized=True)
@@ -285,9 +287,11 @@ class TestDQN(unittest.TestCase):
             if i % 100 == 0:
                 print("randomized", rewards, loss)
 
-        X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [13.0, 0.0], [17.0, 0.0], [20.0, 0.0]]).type(
+        X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [12.0, 0.0], [18.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
         y = net(X)
+
+        args.lr = saved_lr
 
         print(y)
 
@@ -300,10 +304,10 @@ class TestDQN(unittest.TestCase):
         # take if we have 10
         self.assertEqual(torch.argmax(y[2, :]), 1)
 
-        # take if we have 13
+        # take if we have 12
         self.assertEqual(torch.argmax(y[3, :]), 1)
 
-        # finish if we have 17
+        # finish if we have 18
         self.assertEqual(torch.argmax(y[4, :]), 2)
 
         # finish if we have 20
@@ -316,7 +320,7 @@ class TestDQN(unittest.TestCase):
         saved_lr = args.lr
         saved_epsilon = args.epsilon
 
-        args.lr = 0.01
+        args.lr = 0.001
 
         env = gym.make("CartPole-v1")
 
