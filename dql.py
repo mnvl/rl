@@ -173,8 +173,10 @@ class DQL:
 
         return rewards, loss
 
-    def write_video(self, episode):
-        filename = "episode_%06d.mp4" % episode
+    def write_video(self, episode=None, filename=None):
+        if episode is not None:
+            filename = "episode_%06d.mp4" % episode
+
         images = np.concatenate(self.frames, axis=0)
         images = (images * 255).astype(np.uint8)
 
@@ -244,7 +246,7 @@ class TestDQL(unittest.TestCase):
         trainer.observation = trainer.env.reset()
         self.assertEqual(trainer.select_action(epsilon=0), 1)
 
-    def test_train(self):
+    def test_train_deterministic(self):
         args.lr = 0.005
 
         env = MockEnv(randomized=False)
@@ -353,7 +355,45 @@ class TestDQL(unittest.TestCase):
         args.lr = saved_lr
         args.epsilon = saved_epsilon
 
-        trainer.write_video(999999)
+        trainer.write_video(filename="test_cartpole.mp4")
+
+        self.assertGreater(rewards, 200)
+
+    def test_train_lunar(self):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        
+        saved_lr = args.lr
+        saved_epsilon = args.epsilon
+
+        args.lr = 0.0005
+
+        env = gym.make("LunarLander-v2")
+
+        net = nn.Sequential(
+            nn.Linear(8, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, env.action_space.n))
+
+        trainer = DQL(env, net)
+
+        num_episodes = 2000
+        for i in range(num_episodes):
+            magic = (i > num_episodes - 5)
+            
+            if magic:
+                args.epsilon = 0
+
+            rewards, loss = trainer.train(render=magic)
+
+            if i % 100 == 0 or magic:
+                print("lunar", i, rewards, loss)
+
+        args.lr = saved_lr
+        args.epsilon = saved_epsilon
+
+        trainer.write_video(filename="test_lunar.mp4")
 
         self.assertGreater(rewards, 200)
 
