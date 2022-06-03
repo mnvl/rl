@@ -23,12 +23,13 @@ parser.add_argument('--num_episodes', type=int, default=10000)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--epsilon', type=float, default=0.1)
-parser.add_argument('--batch_size', type=int, default=1024)
+parser.add_argument('--steps_per_batch', type=int, default=20)
+parser.add_argument('--batch_size', type=int, default=20)
 parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
 
 args = parser.parse_args()
-env = gym.make(args.env)
+
 
 class AtariNet(nn.Module):
     def __init__(self):
@@ -55,21 +56,30 @@ class AtariNet(nn.Module):
         x = self.fc(x)
         return x
 
+
 class DQL:
-    def __init__(self, env, net):
+    def __init__(self, env, net, device="cpu"):
         self.env = env
         self.net = net
+        self.device = torch.device(device)
+
         self.replay_memory = []
         self.frames = []
         self.done = False
 
+        self.optimizer = optim.Adam(
+            net.parameters(), lr=args.lr, weight_decay=0.001)
+
     def select_action(self, epsilon=args.epsilon):
         if random.random() < args.epsilon:
-            action = int(random.randint(0, env.action_space.n-1))
+            action = int(random.randint(0, self.env.action_space.n-1))
         else:
+            X = np.expand_dims(self.observation, 0)
+
             with torch.no_grad():
-                Q = self.net(torch.tensor(np.expand_dims(self.observation, 0)))
-                action = int(np.argmax(Q.cpu().numpy()[0]))
+                Q = self.net(torch.tensor(X, device=self.device))
+
+            action = int(np.argmax(Q.cpu().numpy()[0]))
 
         return action
 
@@ -82,116 +92,226 @@ class DQL:
     def step(self):
         action = self.select_action()
 
-        new_observation, reward, self.done, info = env.step(action)
-        self.replay_memory.append((observation.copy(), int(action), float(reward), new_observation.copy()))
+        new_observation, reward, self.done, info = self.env.step(action)
+
+        memory = (
+            self.observation.copy(),
+            int(action),
+            float(reward),
+            new_observation.copy(),
+            self.done)
+
+        if len(self.replay_memory) >= args.replay_memory_size:
+            self.replay_memory = self.replay_memory[1:]
+        self.replay_memory.append(memory)
 
         self.observation = new_observation
 
+        return reward
 
-    def train(self):
-        self.observation = env.reset()
+    def optimize(self):
+        batch = [random.choice(self.replay_memory)
+                 for i in range(args.batch_size)]
 
-        while not self.done:
-            self.step()
-        
-
-class MockEnv:
-    def __init__(self):
-        self.state = 0
-        self.action_space = { "n": 5 }
-
-    def reset(self):
-        self.state = 0
-        return 0
-
-    def step(self, action):
-        self.state += random.randint(0, 10) * action
-        return np.arrray([self.state]), self.state if self.state <= 21 else 0, self.state >= 19, None
-
-
-class TestDQN(unittest.TestCase):
-    def test_dqn_select_action(self):
-        net = lambda x: torch.Tensor([[1, 2, 3, 5, 1]])
-        trainer = DQL(MockEnv(), net)
-        self.assertEqual(trainer.select_action(epsilon=0), 3)
-
-        
-        
-
-def train(episode):
-    global replay_memory
-
-    images = []
-
-    render = (episode % 100 == 0)
-
-    observation = env.reset()
-    done = False
-
-    sum_rewards = 0.0
-    sum_loss = 0.0
-
-    while not done:
-        for i in range(args.batch_size // 2):
-
-            sum_rewards += reward
-
-            if len(replay_memory) > args.replay_memory_size:
-                replay_memory = replay_memory[1:]
-
-
-            if done:
-                break
-
-        if len(replay_memory) < args.min_replay_memory_size:
-            continue
-
-        batch = [random.choice(replay_memory) for i in range(args.batch_size)]
         X = []
         for sample in batch:
-            observation, action, reward, new_observation = sample
+            observation, action, reward, new_observation, done = sample
             X.append(np.expand_dims(new_observation, 0))
-        X = np.concatenate(X, axis = 0)
+        X = np.concatenate(X, axis=0)
         with torch.no_grad():
-            Qj = net(torch.tensor(X))
+            Qj = self.net(torch.tensor(X, device=self.device))
 
         X = []
         y = []
         actions = []
         for sample, qj in zip(batch, Qj):
-            observation, action, reward, new_observation = sample
+            observation, action, reward, new_observation, done = sample
+
+            best = np.max(qj.cpu().numpy())
 
             X.append(np.expand_dims(observation, 0))
             actions.append(action)
-            y.append(reward + args.gamma * np.max(qj.cpu().numpy()))
 
-        optimizer.zero_grad()
-        X = np.concatenate(X, axis = 0)
-        Qi = net(torch.tensor(X) / 256.0 - 0.5)
-        Qi = Qi[range(args.batch_size), torch.tensor(actions)]
+            if done:
+                y.append(reward)
+            else:
+                y.append(reward + args.gamma * best)
 
-        y = torch.tensor(y).cuda()
+        X = np.concatenate(X, axis=0)
+        self.optimizer.zero_grad()
+        Qi = self.net(torch.tensor(X, device=self.device))
+        Qi = Qi[range(args.batch_size), torch.tensor(
+            actions, device=self.device)]
+
+        y = torch.tensor(y, device=self.device)
         loss = torch.square(Qi - y)
+
         loss = torch.mean(loss)
 
-        sum_loss += float(loss.detach().cpu())
-
         loss.backward()
+        self.optimizer.step()
 
-        torch.nn.utils.clip_grad_norm_(net.parameters(), 10)
+        return float(loss.detach().cpu())
 
-        optimizer.step()
+    def train(self, steps_per_batch=args.steps_per_batch):
+        self.observation = self.env.reset()
+        self.done = False
 
-    if render:
+        rewards = 0.0
+        loss = 0.0
+
+        while not self.done:
+            for i in range(steps_per_batch):
+                rewards += self.step()
+                if self.done:
+                    break
+
+            loss = self.optimize()
+
+        return rewards, loss
+
+    def write_video(self):
         filename = "episode_%06d.mp4" % episode
-        images = np.concatenate(images, axis = 0)
+        images = np.concatenate(images, axis=0)
         images = (images * 255).astype(np.uint8)
 
         skvideo.io.vwrite(filename, images)
 
         print("wrote %s from %s" % (filename, str(images.shape)))
 
-    return sum_loss, sum_rewards
+        self.images = []
+
+
+class MockEnv:
+    class action_space:
+        n = 3
+
+    def __init__(self, randomized):
+        self.randomized = randomized
+        self.reset()
+
+    def reset(self):
+        self.state = 0.0
+        self.done = False
+        return np.array([np.random.normal(), 0.0]).astype(np.float32)
+
+    def step(self, action):
+        assert action >= 0 and action < 3
+
+        if action == 0 and not self.done:
+            self.state -= 5
+
+        if action == 1 and not self.done:
+            if self.randomized:
+                self.state += random.randint(1, 10)
+            else:
+                self.state += 10
+
+        if action == 2:
+            self.done = True
+
+        if self.state > 21 or self.state < 0:
+            self.done = True
+
+        reward = 0
+        if self.done and self.state <= 21:
+            reward = self.state
+
+        observation = np.array(
+            [self.state+np.random.normal(), self.done]).astype(np.float32)
+
+        return observation, reward, self.done, None
+
+
+class TestDQN(unittest.TestCase):
+    def test_select_action(self):
+        class Net(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(2, 3)
+
+            def forward(self, x):
+                x = self.linear(x)
+                x[0, 0] = 0
+                x[0, 1] = 200
+                x[0, 2] = 0
+                return x
+
+        trainer = DQL(MockEnv(randomized=False), Net())
+        trainer.observation = trainer.env.reset()
+        self.assertEqual(trainer.select_action(epsilon=0), 1)
+
+    def test_train(self):
+        args.lr = 0.005
+
+        env = MockEnv(randomized=False)
+        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+
+        trainer = DQL(env, net)
+
+        for i in range(1000):
+            rewards, loss = trainer.train()
+            if i % 100 == 0:
+                print(rewards, loss)
+
+        X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
+            torch.float32)
+        y = net(X)
+
+        print(y)
+
+        # take 10 if we have 0
+        self.assertEqual(torch.argmax(y[0, :]), 1)
+
+        # take 10 if we have 10
+        self.assertEqual(torch.argmax(y[1, :]), 1)
+
+        # finish if we have 20
+        self.assertEqual(torch.argmax(y[2, :]), 2)
+
+        trainer.observation = env.reset()
+        self.assertEqual(trainer.select_action(epsilon=0.0), 1)
+
+    def test_train_randomized(self):
+        args.lr = 0.01
+
+        env = MockEnv(randomized=True)
+        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+
+        trainer = DQL(env, net)
+
+        for i in range(1000):
+            rewards, loss = trainer.train()
+            if i % 100 == 0:
+                print(rewards, loss)
+
+        X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [13.0, 0.0], [17.0, 0.0], [20.0, 0.0]]).type(
+            torch.float32)
+        y = net(X)
+
+        print(y)
+
+        # take if we have 0
+        self.assertEqual(torch.argmax(y[0, :]), 1)
+
+        # take if we have 5
+        self.assertEqual(torch.argmax(y[1, :]), 1)
+
+        # take if we have 10
+        self.assertEqual(torch.argmax(y[2, :]), 1)
+
+        # take if we have 13
+        self.assertEqual(torch.argmax(y[3, :]), 1)
+
+        # finish if we have 17
+        self.assertEqual(torch.argmax(y[4, :]), 2)
+
+        # finish if we have 20
+        self.assertEqual(torch.argmax(y[5, :]), 2)
+
+        trainer.observation = env.reset()
+        self.assertEqual(trainer.select_action(epsilon=0.0), 1)
+
 
 ###
 '''
