@@ -32,7 +32,7 @@ args = parser.parse_args()
 
 
 class AtariNet(nn.Module):
-    def __init__(self):
+    def __init__(self, env):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 4, 5, 3)
         self.conv2 = nn.Conv2d(4, 8, 3, 2)
@@ -84,7 +84,7 @@ class DQL:
         return action
 
     def render_frame(self):
-        image = env.render(mode="rgb_array")
+        image = self.env.render(mode="rgb_array")
         image = image.copy()
         image = np.expand_dims(image, axis=0)
         self.frames.append(image)
@@ -153,7 +153,7 @@ class DQL:
 
         return float(loss.detach().cpu())
 
-    def train(self, steps_per_batch=args.steps_per_batch):
+    def train(self, render=False, steps_per_batch=args.steps_per_batch):
         self.observation = self.env.reset()
         self.done = False
 
@@ -166,20 +166,23 @@ class DQL:
                 if self.done:
                     break
 
+                if render:
+                    self.render_frame()
+
             loss = self.optimize()
 
         return rewards, loss
 
-    def write_video(self):
+    def write_video(self, episode):
         filename = "episode_%06d.mp4" % episode
-        images = np.concatenate(images, axis=0)
+        images = np.concatenate(self.frames, axis=0)
         images = (images * 255).astype(np.uint8)
 
         skvideo.io.vwrite(filename, images)
 
         print("wrote %s from %s" % (filename, str(images.shape)))
 
-        self.images = []
+        self.frames = []
 
 
 class MockEnv:
@@ -334,7 +337,8 @@ class TestDQN(unittest.TestCase):
         trainer = DQL(env, net)
 
         for i in range(1000):
-            if i > 990: args.epsilon = 0
+            if i > 990:
+                args.epsilon = 0
 
             rewards, loss = trainer.train()
             if i % 100 == 0:
@@ -346,19 +350,26 @@ class TestDQN(unittest.TestCase):
         self.assertGreater(rewards, 200)
 
 
-###
-'''
-if args.first_episode > 0:
-    net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
+def main():
+    env = gym.make(args.env)
+    net = AtariNet(env).cuda()
+    dql = DQL(env, net, device="cuda")
 
-for episode in range(args.first_episode, args.num_episodes):
-    loss, reward = train(episode)
+    if args.first_episode > 0:
+        net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
-    print("episode %6d, loss = %3.6f, reward = %3.6f, rm = %d, gc = %s" % (episode, loss, reward, len(replay_memory), gc.collect()))
+    for episode in range(args.first_episode, args.num_episodes):
+        magic = (episode % 100 == 0)
 
-    if episode % 100 == 0:
-        torch.save(net.state_dict(), "episode_%06d" % episode)
-'''
+        rewards, loss = dql.train(render=magic)
+
+        print("episode %6d, loss = %3.6f, rewards = %3.6f" %
+              (episode, loss, rewards))
+
+        if magic:
+            dql.write_video(episode)
+            torch.save(net.state_dict(), "episode_%06d" % episode)
+
 
 if __name__ == '__main__':
-    unittest.main()
+    main()
