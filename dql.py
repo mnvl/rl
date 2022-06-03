@@ -252,7 +252,7 @@ class TestDQN(unittest.TestCase):
         for i in range(1000):
             rewards, loss = trainer.train()
             if i % 100 == 0:
-                print(rewards, loss)
+                print("regular", rewards, loss)
 
         X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
@@ -283,7 +283,7 @@ class TestDQN(unittest.TestCase):
         for i in range(1000):
             rewards, loss = trainer.train()
             if i % 100 == 0:
-                print(rewards, loss)
+                print("randomized", rewards, loss)
 
         X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [13.0, 0.0], [17.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
@@ -311,6 +311,35 @@ class TestDQN(unittest.TestCase):
 
         trainer.observation = env.reset()
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
+
+    def test_train_cartpole(self):
+        saved_lr = args.lr
+        saved_epsilon = args.epsilon
+
+        args.lr = 0.01
+
+        env = gym.make("CartPole-v1")
+
+        net = nn.Sequential(
+            nn.Linear(4, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, env.action_space.n))
+
+        trainer = DQL(env, net)
+
+        for i in range(1000):
+            if i > 990: args.epsilon = 0
+
+            rewards, loss = trainer.train()
+            if i % 100 == 0:
+                print("cartpole", rewards, loss)
+
+        args.lr = saved_lr
+        args.epsilon = saved_epsilon
+
+        self.assertGreater(rewards, 200)
 
 
 ###
