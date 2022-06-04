@@ -77,7 +77,7 @@ class DQL:
     def select_action(self, epsilon=args.epsilon):
         if random.random() < args.epsilon:
             return int(random.randint(0, self.env.action_space.n-1))
-        
+
         X = np.expand_dims(self.observation, 0)
         with torch.no_grad():
             Q = self.net(torch.tensor(X, device=self.device))
