@@ -23,7 +23,9 @@ parser.add_argument('--first_episode', type=int, default=0)
 parser.add_argument('--num_episodes', type=int, default=10000)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--lr', type=float, default=0.001)
-parser.add_argument('--epsilon', type=float, default=0.1)
+parser.add_argument('--epsilon1', type=float, default=1.0)
+parser.add_argument('--epsilon2', type=float, default=0.01)
+parser.add_argument('--epsilon_episodes', type=int, default=1000)
 parser.add_argument('--steps_per_batch', type=int, default=20)
 parser.add_argument('--batch_size', type=int, default=20)
 parser.add_argument('--min_replay_memory_size', type=int, default=10000)
@@ -71,12 +73,13 @@ class DQL:
         self.replay_memory = []
         self.frames = []
         self.done = False
+        self.epsilon = 0.0
 
         self.optimizer = optim.Adam(
             net.parameters(), lr=args.lr, weight_decay=0.0)
 
-    def select_action(self, epsilon=args.epsilon):
-        if random.random() < args.epsilon:
+    def select_action(self):
+        if random.random() < self.epsilon:
             return int(random.randint(0, self.env.action_space.n-1))
 
         X = np.expand_dims(self.observation, 0)
@@ -144,7 +147,8 @@ class DQL:
         loss = torch.mean(loss)
 
         loss.backward()
-        torch.nn.utils.clip_grad_value_(self.net.parameters(), args.clip_gradients)
+        torch.nn.utils.clip_grad_value_(
+            self.net.parameters(), args.clip_gradients)
         self.optimizer.step()
 
         return float(loss.detach().cpu())
@@ -227,12 +231,10 @@ class MockEnv:
 class TestDQL(unittest.TestCase):
     def setUp(self):
         self.saved_lr = args.lr
-        self.saved_epsilon = args.epsilon
         self.saved_gamma = args.gamma
 
     def tearDown(self):
         args.lr = self.saved_lr
-        args.epsilon = self.saved_epsilon
         args.gamma = self.saved_gamma
 
     def test_select_action(self):
@@ -376,10 +378,6 @@ class TestDQL(unittest.TestCase):
         num_episodes = 1000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-
-            if magic:
-                args.epsilon = 0
-
             rewards, loss = trainer.train(render=magic)
 
             if i % 100 == 0 or magic:
@@ -408,12 +406,6 @@ class TestDQL(unittest.TestCase):
         num_episodes = 1000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-
-            args.epsilon = float(num_episodes - i) / num_episodes
-
-            if magic:
-                args.epsilon = 0
-
             rewards, loss = trainer.train(render=magic)
 
             if i % 100 == 0 or magic:
@@ -433,6 +425,10 @@ def main():
         net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
     for episode in range(args.first_episode, args.num_episodes):
+        dql.epsilon = args.epsilon1 + \
+            float(episode % args.epsilon_episodes) / \
+            args.epsilon_episodes * (args.epsilon2-args.epsilon1)
+
         magic = (episode % 100 == 0)
 
         rewards, loss = dql.train(render=magic)
