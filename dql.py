@@ -283,6 +283,38 @@ class TestDQL(unittest.TestCase):
         trainer.observation = env.reset()
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
+    def test_overfit(self):
+        args.lr = 0.005
+        args.gamma = 0.9
+
+        env = MockEnv(randomized=False)
+        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+
+        trainer = DQL(env, net)
+
+        for i in range(5000):
+            rewards, loss = trainer.train()
+            if i % 100 == 0:
+                print("deterministic", rewards, loss)
+
+        X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
+            torch.float32)
+        y = net(X)
+
+        print(y)
+
+        # take 10 if we have 0
+        self.assertEqual(torch.argmax(y[0, :]), 1)
+
+        # take 10 if we have 10
+        self.assertEqual(torch.argmax(y[1, :]), 1)
+
+        # finish if we have 20
+        self.assertEqual(torch.argmax(y[2, :]), 2)
+
+        trainer.observation = env.reset()
+        self.assertEqual(trainer.select_action(epsilon=0.0), 1)
+
     def test_randomized(self):
         args.lr = 0.005
         args.gamma = 0.9
@@ -375,6 +407,8 @@ class TestDQL(unittest.TestCase):
         num_episodes = 1000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
+
+            args.epsilon = float(num_episodes - i) / num_episodes
 
             if magic:
                 args.epsilon = 0
