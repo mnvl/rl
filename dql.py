@@ -73,7 +73,7 @@ class DQL:
         self.done = False
 
         self.optimizer = optim.Adam(
-            net.parameters(), lr=args.lr, weight_decay=0.001)
+            net.parameters(), lr=args.lr, weight_decay=0.0)
 
     def select_action(self, epsilon=args.epsilon):
         if random.random() < args.epsilon:
