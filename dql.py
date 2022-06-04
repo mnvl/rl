@@ -144,6 +144,7 @@ class DQL:
         loss = torch.mean(loss)
 
         loss.backward()
+        torch.nn.utils.clip_grad_value_(self.net.parameters(), args.clip_gradients)
         self.optimizer.step()
 
         return float(loss.detach().cpu())
