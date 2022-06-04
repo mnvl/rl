@@ -28,6 +28,7 @@ parser.add_argument('--steps_per_batch', type=int, default=20)
 parser.add_argument('--batch_size', type=int, default=20)
 parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
+parser.add_argument('--clip_gradients', type=float, default=1.0)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -43,9 +44,9 @@ class AtariNet(nn.Module):
         self.conv3 = nn.Conv2d(8, 12, 3, 2)
         self.conv4 = nn.Conv2d(12, 14, 3, 2)
         self.conv5 = nn.Conv2d(14, 18, 3, 2)
-        self.linear1 = nn.Linear(108, 50)
-        self.linear2 = nn.Linear(50, 50)
-        self.fc = nn.Linear(50, env.action_space.n)
+        self.linear1 = nn.Linear(108, 64)
+        self.linear2 = nn.Linear(64, 64)
+        self.fc = nn.Linear(64, env.action_space.n)
 
     def forward(self, x):
         x = x.swapdims(1, 3).type(torch.FloatTensor).cuda()
@@ -104,7 +105,6 @@ class DQL:
         if len(self.replay_memory) >= args.replay_memory_size:
             self.replay_memory = self.replay_memory[1:]
         self.replay_memory.append(memory)
-
         self.observation = new_observation
 
         return reward
@@ -113,39 +113,34 @@ class DQL:
         batch = [random.choice(self.replay_memory)
                  for i in range(args.batch_size)]
 
-        X = []
+        Xi = []
+        Xj = []
         for sample in batch:
             observation, action, reward, new_observation, done = sample
-            X.append(np.expand_dims(new_observation, 0))
-        X = np.concatenate(X, axis=0)
-        with torch.no_grad():
-            Qj = self.net(torch.tensor(X, device=self.device))
+            Xi.append(np.expand_dims(observation, 0))
+            Xj.append(np.expand_dims(new_observation, 0))
 
-        X = []
-        y = []
-        actions = []
-        for sample, qj in zip(batch, Qj):
+        Xj = np.concatenate(Xj, axis=0)
+        with torch.no_grad():
+            Qj = self.net(torch.tensor(Xj, device=self.device))
+
+        self.optimizer.zero_grad()
+
+        Xi = np.concatenate(Xi, axis=0)
+        Qi = self.net(torch.tensor(Xi, device=self.device))
+
+        Y = Qi.detach().clone()
+
+        for i, (sample, qi, qj) in enumerate(zip(batch, Qi, Qj)):
             observation, action, reward, new_observation, done = sample
 
-            best = np.max(qj.cpu().numpy())
-
-            X.append(np.expand_dims(observation, 0))
-            actions.append(action)
-
             if done:
-                y.append(reward)
+                Y[i, action] = reward
             else:
-                y.append(reward + args.gamma * best)
+                best = np.max(qj.cpu().numpy())
+                Y[i, action] = reward + args.gamma * best
 
-        X = np.concatenate(X, axis=0)
-        self.optimizer.zero_grad()
-        Qi = self.net(torch.tensor(X, device=self.device))
-        Qi = Qi[range(args.batch_size), torch.tensor(
-            actions, device=self.device)]
-
-        y = torch.tensor(y, device=self.device)
-        loss = torch.square(Qi - y)
-
+        loss = torch.square(Qi - Y)
         loss = torch.mean(loss)
 
         loss.backward()
@@ -204,7 +199,7 @@ class MockEnv:
         assert action >= 0 and action < 3
 
         if action == 0 and not self.done:
-            self.state -= 5
+            self.state += 100
 
         if action == 1 and not self.done:
             if self.randomized:
@@ -218,12 +213,12 @@ class MockEnv:
         if self.state > 21 or self.state < 0:
             self.done = True
 
-        reward = 0
-        if self.done and self.state <= 21:
+        reward = 0.0
+        if self.done and self.state > 0 and self.state <= 21:
             reward = self.state
 
         observation = np.array(
-            [self.state+np.random.normal(), self.done]).astype(np.float32)
+            [self.state, self.done]).astype(np.float32)
 
         return observation, reward, self.done, None
 
@@ -232,10 +227,12 @@ class TestDQL(unittest.TestCase):
     def setUp(self):
         self.saved_lr = args.lr
         self.saved_epsilon = args.epsilon
+        self.saved_gamma = args.gamma
 
     def tearDown(self):
         args.lr = self.saved_lr
         args.epsilon = self.saved_epsilon
+        args.gamma = self.saved_gamma
 
     def test_select_action(self):
         class Net(nn.Module):
@@ -254,8 +251,9 @@ class TestDQL(unittest.TestCase):
         trainer.observation = trainer.env.reset()
         self.assertEqual(trainer.select_action(epsilon=0), 1)
 
-    def test_train_deterministic(self):
+    def test_deterministic(self):
         args.lr = 0.005
+        args.gamma = 0.9
 
         env = MockEnv(randomized=False)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -265,7 +263,7 @@ class TestDQL(unittest.TestCase):
         for i in range(1000):
             rewards, loss = trainer.train()
             if i % 100 == 0:
-                print("regular", rewards, loss)
+                print("deterministic", rewards, loss)
 
         X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
@@ -285,8 +283,9 @@ class TestDQL(unittest.TestCase):
         trainer.observation = env.reset()
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
-    def test_train_randomized(self):
-        args.lr = 0.01
+    def test_randomized(self):
+        args.lr = 0.005
+        args.gamma = 0.9
 
         env = MockEnv(randomized=True)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -325,10 +324,10 @@ class TestDQL(unittest.TestCase):
         trainer.observation = env.reset()
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
-    def test_train_cartpole(self):
+    def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        args.lr = 0.0005
+        args.lr = 0.001
 
         env = gym.make("CartPole-v1")
 
@@ -341,7 +340,7 @@ class TestDQL(unittest.TestCase):
 
         trainer = DQL(env, net)
 
-        num_episodes = 2000
+        num_episodes = 1000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
 
@@ -357,10 +356,10 @@ class TestDQL(unittest.TestCase):
 
         self.assertGreater(rewards, 200)
 
-    def test_train_lunar(self):
+    def test_lunar(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        args.lr = 0.0005
+        args.lr = 0.001
 
         env = gym.make("LunarLander-v2")
 
@@ -373,7 +372,7 @@ class TestDQL(unittest.TestCase):
 
         trainer = DQL(env, net)
 
-        num_episodes = 2000
+        num_episodes = 1000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
 
