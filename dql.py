@@ -229,6 +229,14 @@ class MockEnv:
 
 
 class TestDQL(unittest.TestCase):
+    def setUp(self):
+        self.saved_lr = args.lr
+        self.saved_epsilon = args.epsilon
+
+    def tearDown(self):
+        args.lr = self.saved_lr
+        args.epsilon = self.saved_epsilon
+
     def test_select_action(self):
         class Net(nn.Module):
             def __init__(self):
@@ -278,8 +286,6 @@ class TestDQL(unittest.TestCase):
         self.assertEqual(trainer.select_action(epsilon=0.0), 1)
 
     def test_train_randomized(self):
-        saved_lr = args.lr
-
         args.lr = 0.01
 
         env = MockEnv(randomized=True)
@@ -295,8 +301,6 @@ class TestDQL(unittest.TestCase):
         X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [12.0, 0.0], [18.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
         y = net(X)
-
-        args.lr = saved_lr
 
         print(y)
 
@@ -323,9 +327,6 @@ class TestDQL(unittest.TestCase):
 
     def test_train_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-        
-        saved_lr = args.lr
-        saved_epsilon = args.epsilon
 
         args.lr = 0.0005
 
@@ -343,7 +344,7 @@ class TestDQL(unittest.TestCase):
         num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-            
+
             if magic:
                 args.epsilon = 0
 
@@ -352,18 +353,12 @@ class TestDQL(unittest.TestCase):
             if i % 100 == 0 or magic:
                 print("cartpole", i, rewards, loss)
 
-        args.lr = saved_lr
-        args.epsilon = saved_epsilon
-
         trainer.write_video(filename="test_cartpole.mp4")
 
         self.assertGreater(rewards, 200)
 
     def test_train_lunar(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-        
-        saved_lr = args.lr
-        saved_epsilon = args.epsilon
 
         args.lr = 0.0005
 
@@ -381,7 +376,7 @@ class TestDQL(unittest.TestCase):
         num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-            
+
             if magic:
                 args.epsilon = 0
 
@@ -389,9 +384,6 @@ class TestDQL(unittest.TestCase):
 
             if i % 100 == 0 or magic:
                 print("lunar", i, rewards, loss)
-
-        args.lr = saved_lr
-        args.epsilon = saved_epsilon
 
         trainer.write_video(filename="test_lunar.mp4")
 
