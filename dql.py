@@ -77,7 +77,7 @@ class DQL:
     def select_action(self, epsilon=args.epsilon):
         if random.random() < args.epsilon:
             return int(random.randint(0, self.env.action_space.n-1))
-        
+
         X = np.expand_dims(self.observation, 0)
         with torch.no_grad():
             Q = self.net(torch.tensor(X, device=self.device))
@@ -323,7 +323,7 @@ class TestDQL(unittest.TestCase):
 
     def test_train_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-        
+
         saved_lr = args.lr
         saved_epsilon = args.epsilon
 
@@ -343,7 +343,7 @@ class TestDQL(unittest.TestCase):
         num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-            
+
             if magic:
                 args.epsilon = 0
 
@@ -361,7 +361,7 @@ class TestDQL(unittest.TestCase):
 
     def test_train_lunar(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-        
+
         saved_lr = args.lr
         saved_epsilon = args.epsilon
 
@@ -381,7 +381,7 @@ class TestDQL(unittest.TestCase):
         num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-            
+
             if magic:
                 args.epsilon = 0
 
