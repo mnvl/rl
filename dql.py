@@ -32,7 +32,7 @@ parser.add_argument('--batch_size', type=int, default=20)
 parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
 parser.add_argument('--clip_gradients', type=float, default=1.0)
-parser.add_argument('--load_target_weights_steps', type=int, default=100)
+parser.add_argument('--load_target_weights_episodes', type=int, default=100)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -80,7 +80,7 @@ def prepare_breakout(s):
 
 
 class DQL:
-    def __init__(self, env, net, target_net=None, episode=0, device="cpu"):
+    def __init__(self, env, net, target_net=None, episode=0, device="cpu", prepare=lambda x: x):
         if target_net is None:
             target_net = copy.deepcopy(net)
 
@@ -88,6 +88,7 @@ class DQL:
         self.net = net
         self.target_net = target_net
         self.device = torch.device(device)
+        self.prepare = prepare
 
         self.replay_memory = []
         self.frames = []
@@ -116,7 +117,7 @@ class DQL:
         action = self.select_action()
 
         new_observation, reward, self.done, info = self.env.step(action)
-        new_observation = prepare_breakout(new_observation)
+        new_observation = self.prepare(new_observation)
 
         memory = (
             self.observation.copy(),
@@ -174,7 +175,7 @@ class DQL:
         return float(loss.detach().cpu())
 
     def train(self, render=False, steps_per_batch=args.steps_per_batch):
-        self.observation = prepare_breakout(self.env.reset())
+        self.observation = self.prepare(self.env.reset())
         self.done = False
 
         rewards = 0.0
@@ -184,7 +185,7 @@ class DQL:
             float(self.episode % args.epsilon_episodes) / \
             args.epsilon_episodes * (args.epsilon2-args.epsilon1)
 
-        if self.episode % args.load_target_weights_steps == 0:
+        if self.episode % args.load_target_weights_episodes == 0:
             self.target_net.load_state_dict(self.net.state_dict())
 
         self.episode += 1
@@ -262,18 +263,18 @@ class TestDQL(unittest.TestCase):
         self.save = (
             args.lr,
             args.gamma,
-            args.load_target_weights_steps,
+            args.load_target_weights_episodes,
             args.epsilon1,
             args.epsilon2,
             args.epsilon_episodes)
 
-        args.load_target_weights_steps = 100
+        args.load_target_weights_episodes = 100
         args.epsilon_episodes = 100
 
     def tearDown(self):
         (args.lr,
          args.gamma,
-         args.load_target_weights_steps,
+         args.load_target_weights_episodes,
          args.epsilon1,
          args.epsilon2,
          args.epsilon_episodes) = self.save
@@ -463,6 +464,54 @@ class TestDQL(unittest.TestCase):
 
         self.assertGreater(rewards, 200)
 
+
+    def test_cheap_pong(self):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+
+        args.lr = 0.1
+
+        env = gym.make("ALE/Pong-v5", full_action_space=False, frameskip=4)
+
+        net = nn.Sequential(
+            nn.Linear(6, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, env.action_space.n))
+
+        def prepare(s):
+            right_x, right_y = np.where(s[:, :, 0] == 92)
+            right_x = np.mean(right_x)
+            right_y = np.mean(right_y)
+
+            left_x, left_y = np.where(s[:, :, 0] == 213)
+            left_x = np.mean(left_x)
+            left_y = np.mean(left_y)
+
+            ball_x, ball_y = np.where(s[:, :, 0] == 236)
+            ball_x = np.mean(ball_x)
+            ball_y = np.mean(ball_y)
+
+            state = np.array([right_x, right_y, left_x, left_y, ball_x, ball_y])
+            state[np.isnan(state)] = -1.0
+
+            state = state.astype(np.float32)
+
+            return state
+
+        trainer = DQL(env, net, prepare=prepare)
+
+        num_episodes = 10000
+        for i in range(num_episodes):
+            magic = (i%100 == 99)
+            rewards, loss = trainer.train(render=magic)
+
+            if magic:
+                trainer.write_video(filename="test_cheap_pong.mp4")
+
+            print("cheap_pong", i, rewards, loss)
+
+        self.assertGreater(rewards, 0)
 
 def main():
     env = gym.make(args.env, full_action_space=False)
