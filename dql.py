@@ -468,11 +468,11 @@ class TestDQL(unittest.TestCase):
         env = gym.make("ALE/Pong-v5", full_action_space=False, frameskip=4)
 
         net = nn.Sequential(
-            nn.Linear(6, 8),
+            nn.Linear(6, 32),
             nn.ReLU(),
-            nn.Linear(8, 8),
+            nn.Linear(32, 32),
             nn.ReLU(),
-            nn.Linear(8, env.action_space.n))
+            nn.Linear(32, env.action_space.n))
 
         def prepare(s):
             right_x, right_y = np.where(s[:, :, 0] == 92)
