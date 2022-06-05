@@ -43,27 +43,40 @@ else:
 class AtariNet(nn.Module):
     def __init__(self, env):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 4, 5, 3)
+        self.conv1 = nn.Conv2d(1, 4, 5, 3)
         self.conv2 = nn.Conv2d(4, 8, 3, 2)
-        self.conv3 = nn.Conv2d(8, 12, 3, 2)
-        self.conv4 = nn.Conv2d(12, 14, 3, 2)
-        self.conv5 = nn.Conv2d(14, 18, 3, 2)
-        self.linear1 = nn.Linear(108, 64)
+        self.conv3 = nn.Conv2d(8, 16, 3, 2)
+        self.conv4 = nn.Conv2d(16, 32, 3, 2)
+        self.linear1 = nn.Linear(128, 64)
         self.linear2 = nn.Linear(64, 64)
         self.fc = nn.Linear(64, env.action_space.n)
 
     def forward(self, x):
-        x = x.swapdims(1, 3).type(torch.FloatTensor).cuda()
+        x = x.type(torch.FloatTensor).cuda()
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
-        x = F.relu(self.conv5(x))
-        x = x.reshape((-1, 108))
+        x = x.reshape((x.shape[0], 128))
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         x = self.fc(x)
         return x
+
+
+def prepare_pong(s):
+    s = s[32:196, :, :].mean(axis=2)/255.0
+    s = s.reshape((164//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
+    s = np.expand_dims(s, 0)
+    return s
+
+
+def prepare_breakout(s):
+    s = s[26:, :, :]
+    s = s.mean(axis=2)/256.0
+    s = s.reshape((184//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
+    s = np.expand_dims(s, 0)
+    return s
 
 
 class DQL:
@@ -103,6 +116,7 @@ class DQL:
         action = self.select_action()
 
         new_observation, reward, self.done, info = self.env.step(action)
+        new_observation = prepare_breakout(new_observation)
 
         memory = (
             self.observation.copy(),
@@ -160,17 +174,20 @@ class DQL:
         return float(loss.detach().cpu())
 
     def train(self, render=False, steps_per_batch=args.steps_per_batch):
-        self.observation = self.env.reset()
+        self.observation = prepare_breakout(self.env.reset())
         self.done = False
 
         rewards = 0.0
         loss = 0.0
 
-        self.epsilon = args.epsilon1 + float(self.episode % args.epsilon_episodes) / args.epsilon_episodes * (args.epsilon2-args.epsilon1)
-        self.episode += 1
+        self.epsilon = args.epsilon1 + \
+            float(self.episode % args.epsilon_episodes) / \
+            args.epsilon_episodes * (args.epsilon2-args.epsilon1)
 
-        if self.episode % args.load_target_weights_steps:
+        if self.episode % args.load_target_weights_steps == 0:
             self.target_net.load_state_dict(self.net.state_dict())
+
+        self.episode += 1
 
         while not self.done:
             for i in range(steps_per_batch):
@@ -448,7 +465,7 @@ class TestDQL(unittest.TestCase):
 
 
 def main():
-    env = gym.make(args.env)
+    env = gym.make(args.env, full_action_space=False)
     net = AtariNet(env).cuda()
     dql = DQL(env, net, device="cuda")
 
