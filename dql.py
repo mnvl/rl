@@ -19,19 +19,17 @@ import skvideo.io
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
-parser.add_argument('--temp', type=float, default=1)
 parser.add_argument('--first_episode', type=int, default=0)
 parser.add_argument('--num_episodes', type=int, default=10000)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--epsilon1', type=float, default=1.0)
-parser.add_argument('--epsilon2', type=float, default=0.01)
+parser.add_argument('--epsilon2', type=float, default=0.1)
 parser.add_argument('--epsilon_episodes', type=int, default=1000)
+parser.add_argument('--stop_epsilon_interp_episodes', type=int, default=5000)
 parser.add_argument('--steps_per_batch', type=int, default=20)
 parser.add_argument('--batch_size', type=int, default=20)
-parser.add_argument('--min_replay_memory_size', type=int, default=10000)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
-parser.add_argument('--clip_gradients', type=float, default=1.0)
 parser.add_argument('--load_target_weights_episodes', type=int, default=100)
 
 if __name__ == '__main__':
@@ -167,7 +165,7 @@ class DQL:
                 best = float(qj.cpu().max())
                 y.append(reward + args.gamma * best)
 
-        y = torch.Tensor(y).to(self.device)
+        y = torch.tensor(y, device=self.device)
 
         loss = torch.square(Qi[range(Qi.shape[0]), actions] - y)
         loss = torch.mean(loss)
@@ -184,9 +182,11 @@ class DQL:
         rewards = 0.0
         loss = 0.0
 
-        self.epsilon = args.epsilon1 + \
-            float(self.episode % args.epsilon_episodes) / \
-            args.epsilon_episodes * (args.epsilon2-args.epsilon1)
+        if self.episode >= args.stop_epsilon_interp_episodes:
+            self.epsilon = args.epsilon2
+        else:
+            alpha = float(self.episode % args.epsilon_episodes) / args.epsilon_episodes
+            self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
 
         if self.episode % args.load_target_weights_episodes == 0:
             self.target_net.load_state_dict(self.net.state_dict())
@@ -269,10 +269,12 @@ class TestDQL(unittest.TestCase):
             args.load_target_weights_episodes,
             args.epsilon1,
             args.epsilon2,
-            args.epsilon_episodes)
+            args.epsilon_episodes,
+            args.stop_epsilon_interp_episodes)
 
         args.load_target_weights_episodes = 100
         args.epsilon_episodes = 100
+        args.stop_epsilon_interp_episodes = 1000
 
     def tearDown(self):
         (args.lr,
@@ -280,7 +282,8 @@ class TestDQL(unittest.TestCase):
          args.load_target_weights_episodes,
          args.epsilon1,
          args.epsilon2,
-         args.epsilon_episodes) = self.save
+         args.epsilon_episodes,
+        args.stop_epsilon_interp_episodes) = self.save
 
     def test_select_action(self):
         class Net(nn.Module):
@@ -297,7 +300,8 @@ class TestDQL(unittest.TestCase):
 
         trainer = DQL(MockEnv(randomized=False), Net())
         trainer.observation = trainer.env.reset()
-        self.assertEqual(trainer.select_action(epsilon=0), 1)
+        trainer.epsilon = 0.0
+        self.assertEqual(trainer.select_action(), 1)
 
     def test_deterministic(self):
         args.lr = 0.005
@@ -423,7 +427,7 @@ class TestDQL(unittest.TestCase):
 
         trainer = DQL(env, net, copy.deepcopy(net))
 
-        num_episodes = 2000
+        num_episodes = 1200
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
             reward, loss = trainer.train(render=magic)
@@ -435,91 +439,6 @@ class TestDQL(unittest.TestCase):
 
         self.assertGreater(reward, 200)
 
-    def test_lunar(self):
-        os.environ["SDL_VIDEODRIVER"] = "dummy"
-
-        args.lr = 0.001
-
-        env = gym.make("LunarLander-v2")
-
-        net = nn.Sequential(
-            nn.Linear(8, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, env.action_space.n))
-
-        trainer = DQL(env, net)
-
-        num_episodes = 1000
-        for i in range(num_episodes):
-            magic = (i > num_episodes - 5)
-            rewards, loss = trainer.train(render=magic)
-
-            if i % 100 == 0 or magic:
-                print("lunar", i, rewards, loss)
-
-        trainer.write_video(filename="test_lunar.mp4")
-
-        self.assertGreater(rewards, 200)
-
-
-    def test_cheap_pong(self):
-        os.environ["SDL_VIDEODRIVER"] = "dummy"
-
-        args.lr = 0.1
-        args.batch_size = 256
-
-        env = gym.make("ALE/Pong-v5", full_action_space=False, frameskip=4)
-
-        net = nn.Sequential(
-            nn.Linear(6*5, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, env.action_space.n))
-
-        def prepare(s, lookback):
-            right_x, right_y = np.where(s[:, :, 0] == 92)
-            right_x = np.mean(right_x)
-            right_y = np.mean(right_y)
-
-            left_x, left_y = np.where(s[:, :, 0] == 213)
-            left_x = np.mean(left_x)
-            left_y = np.mean(left_y)
-
-            ball_x, ball_y = np.where(s[:, :, 0] == 236)
-            ball_x = np.mean(ball_x)
-            ball_y = np.mean(ball_y)
-
-            state = np.array([right_x, right_y, left_x, left_y, ball_x, ball_y])
-            state[np.isnan(state)] = -1.0
-
-            state = state.astype(np.float32)
-
-            lookback.append(state)
-            while len(lookback) <= 4:
-                lookback.append(state)
-
-            result = np.concatenate(lookback)
-            del lookback[0]
-
-            return result
-
-        lookback = []
-        trainer = DQL(env, net, prepare=lambda x: prepare(x, lookback), device="cuda")
-
-        num_episodes = 10000
-        for i in range(num_episodes):
-            magic = (i%100 == 99)
-            rewards, loss = trainer.train(render=magic)
-
-            if magic:
-                trainer.write_video(filename="test_cheap_pong.mp4")
-
-            print("cheap_pong", i, rewards, loss)
-
-        self.assertGreater(rewards, 0)
 
 def main():
     env = gym.make(args.env, full_action_space=False)
