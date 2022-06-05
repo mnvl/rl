@@ -85,9 +85,9 @@ class DQL:
             target_net = copy.deepcopy(net)
 
         self.env = env
-        self.net = net
-        self.target_net = target_net
         self.device = torch.device(device)
+        self.net = net.to(self.device)
+        self.target_net = target_net.to(self.device)
         self.prepare = prepare
 
         self.replay_memory = []
@@ -153,18 +153,23 @@ class DQL:
         Xi = np.concatenate(Xi, axis=0)
         Qi = self.net(torch.tensor(Xi, device=self.device))
 
-        Y = Qi.detach().clone()
+        actions = []
+        y = []
 
-        for i, (sample, qi, qj) in enumerate(zip(batch, Qi, Qj)):
+        for sample, qj in zip(batch, Qj):
             observation, action, reward, new_observation, done = sample
 
-            if done:
-                Y[i, action] = reward
-            else:
-                best = np.max(qj.cpu().numpy())
-                Y[i, action] = reward + args.gamma * best
+            actions.append(action)
 
-        loss = torch.square(Qi - Y)
+            if done:
+                y.append(reward)
+            else:
+                best = float(qj.cpu().max())
+                y.append(reward + args.gamma * best)
+
+        y = torch.Tensor(y).to(self.device)
+
+        loss = torch.square(Qi[range(Qi.shape[0]), actions] - y)
         loss = torch.mean(loss)
 
         loss.backward()
@@ -463,18 +468,18 @@ class TestDQL(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         args.lr = 0.1
-        args.batch_size = 128
+        args.batch_size = 256
 
         env = gym.make("ALE/Pong-v5", full_action_space=False, frameskip=4)
 
         net = nn.Sequential(
-            nn.Linear(6, 32),
+            nn.Linear(6*5, 128),
             nn.ReLU(),
-            nn.Linear(32, 32),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(32, env.action_space.n))
+            nn.Linear(128, env.action_space.n))
 
-        def prepare(s):
+        def prepare(s, lookback):
             right_x, right_y = np.where(s[:, :, 0] == 92)
             right_x = np.mean(right_x)
             right_y = np.mean(right_y)
@@ -492,9 +497,17 @@ class TestDQL(unittest.TestCase):
 
             state = state.astype(np.float32)
 
-            return state
+            lookback.append(state)
+            while len(lookback) <= 4:
+                lookback.append(state)
 
-        trainer = DQL(env, net, prepare=prepare)
+            result = np.concatenate(lookback)
+            del lookback[0]
+
+            return result
+
+        lookback = []
+        trainer = DQL(env, net, prepare=lambda x: prepare(x, lookback), device="cuda")
 
         num_episodes = 10000
         for i in range(num_episodes):
