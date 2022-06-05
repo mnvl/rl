@@ -453,6 +453,7 @@ def main():
     dql = DQL(env, net, device="cuda")
 
     if args.first_episode > 0:
+        print("loading weights")
         net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
     for episode in range(args.first_episode, args.num_episodes):
