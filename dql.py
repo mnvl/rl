@@ -45,34 +45,26 @@ class AtariNet(nn.Module):
         self.conv2 = nn.Conv2d(4, 8, 3, 2)
         self.conv3 = nn.Conv2d(8, 16, 3, 2)
         self.conv4 = nn.Conv2d(16, 32, 3, 2)
-        self.linear1 = nn.Linear(128, 64)
+        self.linear1 = nn.Linear(192, 64)
         self.linear2 = nn.Linear(64, 64)
         self.fc = nn.Linear(64, env.action_space.n)
 
     def forward(self, x):
-        x = x.type(torch.FloatTensor).cuda()
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
-        x = x.reshape((x.shape[0], 128))
+        x = x.reshape((x.shape[0], -1))
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         x = self.fc(x)
         return x
 
 
-def prepare_pong(s):
-    s = s[32:196, :, :].mean(axis=2)/255.0
-    s = s.reshape((164//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
-    s = np.expand_dims(s, 0)
-    return s
-
-
-def prepare_breakout(s):
-    s = s[26:, :, :]
-    s = s.mean(axis=2)/256.0
-    s = s.reshape((184//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
+def prepare_atari(s):
+    s = s.astype(np.float32)
+    s = s.mean(axis=2)/255.0
+    s = s.reshape((210//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
     s = np.expand_dims(s, 0)
     return s
 
@@ -442,8 +434,8 @@ class TestDQL(unittest.TestCase):
 
 def main():
     env = gym.make(args.env, full_action_space=False)
-    net = AtariNet(env).cuda()
-    dql = DQL(env, net, device="cuda")
+    net = AtariNet(env)
+    dql = DQL(env, net, device="cuda", prepare=prepare_atari)
 
     if args.first_episode > 0:
         print("loading weights")
