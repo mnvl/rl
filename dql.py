@@ -1,6 +1,5 @@
 
 import os
-import gc
 import random
 import argparse
 import unittest
@@ -13,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch.distributions as D
+from torch.utils.tensorboard import SummaryWriter
 
 import skvideo.io
 
@@ -28,7 +27,7 @@ parser.add_argument('--epsilon2', type=float, default=0.05)
 parser.add_argument('--epsilon_decay', type=float, default=1000)
 parser.add_argument('--steps_per_batch', type=int, default=256)
 parser.add_argument('--batch_size', type=int, default=256)
-parser.add_argument('--replay_memory_size', type=int, default=100000)
+parser.add_argument('--replay_memory_size', type=int, default=200000)
 parser.add_argument('--update_target_every_episodes', type=int, default=100)
 
 if __name__ == '__main__':
@@ -40,21 +39,19 @@ else:
 class AtariNet(nn.Module):
     def __init__(self, env):
         super().__init__()
-        self.conv1 = nn.Conv2d(4, 4, 5, 3)
-        self.conv2 = nn.Conv2d(4, 8, 3, 2)
-        self.conv3 = nn.Conv2d(8, 16, 3, 2)
-        self.conv4 = nn.Conv2d(16, 32, 3, 2)
-        self.linear1 = nn.Linear(128, 64)
-        self.fc = nn.Linear(64, env.action_space.n)
+        self.conv1 = nn.Conv2d(4, 32, 8, stride=4)
+        self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
+        self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
+        self.linear1 = nn.Linear(2304, 512)
+        self.linear2 = nn.Linear(512, env.action_space.n)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
         x = x.reshape((x.shape[0], -1))
         x = F.relu(self.linear1(x))
-        x = self.fc(x)
+        x = self.linear2(x)
         return x
 
 
@@ -99,6 +96,8 @@ class DQL:
         self.optimizer = optim.Adam(
             net.parameters(), lr=args.lr, weight_decay=0.0)
 
+        self.writer = SummaryWriter()
+
     def select_action(self):
         if random.random() < self.epsilon:
             return int(random.randint(0, self.env.action_space.n-1))
@@ -132,6 +131,8 @@ class DQL:
         self.replay_memory.append(memory)
         self.observation = new_observation
 
+        self.frame += 1
+
         return reward
 
     def optimize(self):
@@ -148,11 +149,15 @@ class DQL:
         Xj = np.concatenate(Xj, axis=0)
         with torch.no_grad():
             Qj = self.target_net(torch.tensor(Xj, device=self.device))
+        self.writer.add_scalar("mean_Qj", Qj.reshape(-1).mean(), self.episode)
+        self.writer.add_histogram("Qj", Qj.reshape(-1), self.episode)
 
         self.optimizer.zero_grad()
 
         Xi = np.concatenate(Xi, axis=0)
         Qi = self.net(torch.tensor(Xi, device=self.device))
+        self.writer.add_scalar("mean_Qi", Qi.reshape(-1).mean(), self.episode)
+        self.writer.add_histogram("Qi", Qi.reshape(-1), self.episode)
 
         actions = []
         y = []
@@ -183,7 +188,7 @@ class DQL:
         self.done = False
 
         rewards = 0.0
-        loss = 0.0
+        losses = []
 
         alpha = min(self.episode / args.epsilon_decay, 1.0)
         self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
@@ -194,11 +199,15 @@ class DQL:
         while not self.done:
             for i in range(steps_per_batch):
                 rewards += self.step()
-                self.frame += 1
                 if self.done: break
                 if render: self.render_frame()
 
-            loss = self.optimize()
+            losses.append(self.optimize())
+
+        loss = np.mean(losses)
+
+        self.writer.add_scalar("loss", loss, self.episode)
+        self.writer.add_scalar("reward", rewards, self.episode)
 
         self.episode += 1
 
@@ -445,13 +454,18 @@ def main():
         print("loading weights")
         net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
+    rewards = []
+
     for episode in range(args.first_episode, args.num_episodes):
         magic = (episode % 100 == 0)
 
-        rewards, loss = dql.train(render=magic)
+        reward, loss = dql.train(render=magic)
+        rewards.append(reward)
+        if len(rewards) > 100:
+            del rewards[0]
 
-        print("episode %6d, loss = %3.6f, rewards = %3.6f, epsilon = %.6f" %
-              (episode, loss, rewards, dql.epsilon))
+        print("episode %6d, loss = %3.6f, reward = %3.6f, mean_reward = %3.6f, epsilon = %.6f" %
+              (episode, loss, reward, np.mean(rewards), dql.epsilon))
 
         if magic:
             dql.write_video(episode)
