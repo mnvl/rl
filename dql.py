@@ -22,15 +22,14 @@ parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
 parser.add_argument('--first_episode', type=int, default=0)
 parser.add_argument('--num_episodes', type=int, default=10000)
 parser.add_argument('--gamma', type=float, default=0.99)
-parser.add_argument('--lr', type=float, default=0.001)
+parser.add_argument('--lr', type=float, default=0.1)
 parser.add_argument('--epsilon1', type=float, default=1.0)
-parser.add_argument('--epsilon2', type=float, default=0.1)
+parser.add_argument('--epsilon2', type=float, default=0.05)
 parser.add_argument('--epsilon_decay', type=float, default=1000)
-parser.add_argument('--stop_epsilon_interp_episodes', type=int, default=5000)
-parser.add_argument('--steps_per_batch', type=int, default=20)
-parser.add_argument('--batch_size', type=int, default=20)
+parser.add_argument('--steps_per_batch', type=int, default=256)
+parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--replay_memory_size', type=int, default=100000)
-parser.add_argument('--load_target_weights_episodes', type=int, default=100)
+parser.add_argument('--update_target_every_episodes', type=int, default=100)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -41,12 +40,11 @@ else:
 class AtariNet(nn.Module):
     def __init__(self, env):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 4, 5, 3)
+        self.conv1 = nn.Conv2d(4, 4, 5, 3)
         self.conv2 = nn.Conv2d(4, 8, 3, 2)
         self.conv3 = nn.Conv2d(8, 16, 3, 2)
         self.conv4 = nn.Conv2d(16, 32, 3, 2)
-        self.linear1 = nn.Linear(192, 64)
-        self.linear2 = nn.Linear(64, 64)
+        self.linear1 = nn.Linear(128, 64)
         self.fc = nn.Linear(64, env.action_space.n)
 
     def forward(self, x):
@@ -56,17 +54,28 @@ class AtariNet(nn.Module):
         x = F.relu(self.conv4(x))
         x = x.reshape((x.shape[0], -1))
         x = F.relu(self.linear1(x))
-        x = F.relu(self.linear2(x))
         x = self.fc(x)
         return x
 
 
-def prepare_atari(s):
-    s = s.astype(np.float32)
-    s = s.mean(axis=2)/255.0
-    s = s.reshape((210//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
-    s = np.expand_dims(s, 0)
-    return s
+class AtariPre:
+    def __init__(self):
+        self.lookback = []
+
+    def __call__(self, s):
+        s = s[32:196, :, :]
+        s = s.astype(np.float32)
+        s = s.mean(axis=2)/255.0
+        s = s.reshape((164//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
+        s = np.expand_dims(s, 0)
+
+        if len(self.lookback) == 0:
+            self.lookback = [s, s, s, s]
+
+        self.lookback.append(s)
+        del self.lookback[0]
+
+        return np.concatenate(self.lookback, axis=0)
 
 
 class DQL:
@@ -81,9 +90,11 @@ class DQL:
         self.prepare = prepare
 
         self.replay_memory = []
-        self.frames = []
         self.done = False
         self.episode = episode
+        self.frame = 0
+
+        self.render_frames = []
 
         self.optimizer = optim.Adam(
             net.parameters(), lr=args.lr, weight_decay=0.0)
@@ -101,7 +112,7 @@ class DQL:
         image = self.env.render(mode="rgb_array")
         image = image.copy()
         image = np.expand_dims(image, axis=0)
-        self.frames.append(image)
+        self.render_frames.append(image)
 
     def step(self):
         action = self.select_action()
@@ -174,27 +185,22 @@ class DQL:
         rewards = 0.0
         loss = 0.0
 
-        if self.episode >= args.stop_epsilon_interp_episodes:
-            self.epsilon = args.epsilon2
-        else:
-            alpha = max(self.episode / args.epsilon_decay, 1.0)
-            self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
+        alpha = min(self.episode / args.epsilon_decay, 1.0)
+        self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
 
-        if self.episode % args.load_target_weights_episodes == 0:
+        if self.episode % args.update_target_every_episodes == 0:
             self.target_net.load_state_dict(self.net.state_dict())
-
-        self.episode += 1
 
         while not self.done:
             for i in range(steps_per_batch):
                 rewards += self.step()
-                if self.done:
-                    break
-
-                if render:
-                    self.render_frame()
+                self.frame += 1
+                if self.done: break
+                if render: self.render_frame()
 
             loss = self.optimize()
+
+        self.episode += 1
 
         return rewards, loss
 
@@ -202,14 +208,14 @@ class DQL:
         if episode is not None:
             filename = "episode_%06d.mp4" % episode
 
-        images = np.concatenate(self.frames, axis=0)
+        images = np.concatenate(self.render_frames, axis=0)
         images = (images * 255).astype(np.uint8)
 
         skvideo.io.vwrite(filename, images)
 
         print("wrote %s from %s" % (filename, str(images.shape)))
 
-        self.frames = []
+        self.render_frames = []
 
 
 class MockEnv:
@@ -258,20 +264,20 @@ class TestDQL(unittest.TestCase):
         self.save = (
             args.lr,
             args.gamma,
-            args.load_target_weights_episodes,
+            args.update_target_every_episodes,
             args.epsilon1,
             args.epsilon2,
             args.epsilon_decay,
             args.stop_epsilon_interp_episodes)
 
-        args.load_target_weights_episodes = 100
+        args.update_target_every_episodes = 100
         args.epsilon_decay = 100
         args.stop_epsilon_interp_episodes = 1000
 
     def tearDown(self):
         (args.lr,
          args.gamma,
-         args.load_target_weights_episodes,
+         args.update_target_every_episodes,
          args.epsilon1,
          args.epsilon2,
          args.epsilon_decay,
@@ -432,7 +438,8 @@ class TestDQL(unittest.TestCase):
 def main():
     env = gym.make(args.env, full_action_space=False)
     net = AtariNet(env)
-    dql = DQL(env, net, device="cuda", prepare=prepare_atari)
+    pre = AtariPre()
+    dql = DQL(env, net, device="cuda", prepare=pre)
 
     if args.first_episode > 0:
         print("loading weights")
@@ -443,8 +450,8 @@ def main():
 
         rewards, loss = dql.train(render=magic)
 
-        print("episode %6d, loss = %3.6f, rewards = %3.6f" %
-              (episode, loss, rewards))
+        print("episode %6d, loss = %3.6f, rewards = %3.6f, epsilon = %.6f" %
+              (episode, loss, rewards, dql.epsilon))
 
         if magic:
             dql.write_video(episode)
