@@ -28,7 +28,7 @@ parser.add_argument('--epsilon_decay', type=float, default=1000)
 parser.add_argument('--steps_per_batch', type=int, default=256)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--replay_memory_size', type=int, default=200000)
-parser.add_argument('--update_target_every_episodes', type=int, default=100)
+parser.add_argument('--update_target_every_episodes', type=int, default=25)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -72,7 +72,7 @@ class AtariPre:
         self.lookback.append(s)
         del self.lookback[0]
 
-        return np.concatenate(self.lookback, axis=0)
+        return np.concatenate(self.lookback, axis=0).copy()
 
 
 class DQL:
@@ -120,10 +120,10 @@ class DQL:
         new_observation = self.prepare(new_observation)
 
         memory = (
-            self.observation.copy(),
+            self.observation,
             int(action),
             float(reward),
-            new_observation.copy(),
+            new_observation,
             self.done)
 
         if len(self.replay_memory) >= args.replay_memory_size:
@@ -149,14 +149,14 @@ class DQL:
         Xj = np.concatenate(Xj, axis=0)
         with torch.no_grad():
             Qj = self.target_net(torch.tensor(Xj, device=self.device))
-        self.writer.add_scalar("mean_Qj", Qj.reshape(-1).mean(), self.episode)
+        self.writer.add_scalar("mean_Qj", Qj.mean(), self.episode)
         self.writer.add_histogram("Qj", Qj.reshape(-1), self.episode)
 
         self.optimizer.zero_grad()
 
         Xi = np.concatenate(Xi, axis=0)
         Qi = self.net(torch.tensor(Xi, device=self.device))
-        self.writer.add_scalar("mean_Qi", Qi.reshape(-1).mean(), self.episode)
+        self.writer.add_scalar("mean_Qi", Qi.mean(), self.episode)
         self.writer.add_histogram("Qi", Qi.reshape(-1), self.episode)
 
         actions = []
