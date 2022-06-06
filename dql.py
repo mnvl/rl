@@ -25,7 +25,7 @@ parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--epsilon1', type=float, default=1.0)
 parser.add_argument('--epsilon2', type=float, default=0.1)
-parser.add_argument('--epsilon_episodes', type=int, default=1000)
+parser.add_argument('--epsilon_decay', type=float, default=1000)
 parser.add_argument('--stop_epsilon_interp_episodes', type=int, default=5000)
 parser.add_argument('--steps_per_batch', type=int, default=20)
 parser.add_argument('--batch_size', type=int, default=20)
@@ -177,7 +177,7 @@ class DQL:
         if self.episode >= args.stop_epsilon_interp_episodes:
             self.epsilon = args.epsilon2
         else:
-            alpha = float(self.episode % args.epsilon_episodes) / args.epsilon_episodes
+            alpha = max(self.episode / args.epsilon_decay, 1.0)
             self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
 
         if self.episode % args.load_target_weights_episodes == 0:
@@ -261,11 +261,11 @@ class TestDQL(unittest.TestCase):
             args.load_target_weights_episodes,
             args.epsilon1,
             args.epsilon2,
-            args.epsilon_episodes,
+            args.epsilon_decay,
             args.stop_epsilon_interp_episodes)
 
         args.load_target_weights_episodes = 100
-        args.epsilon_episodes = 100
+        args.epsilon_decay = 100
         args.stop_epsilon_interp_episodes = 1000
 
     def tearDown(self):
@@ -274,7 +274,7 @@ class TestDQL(unittest.TestCase):
          args.load_target_weights_episodes,
          args.epsilon1,
          args.epsilon2,
-         args.epsilon_episodes,
+         args.epsilon_decay,
         args.stop_epsilon_interp_episodes) = self.save
 
     def test_select_action(self):
@@ -404,9 +404,6 @@ class TestDQL(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         args.lr = 0.001
-        args.epsilon1 = 1.0
-        args.epsilon2 = 0.01
-        args.epsilon_episodes = 1000
 
         env = gym.make("CartPole-v1")
 
@@ -419,7 +416,7 @@ class TestDQL(unittest.TestCase):
 
         trainer = DQL(env, net, copy.deepcopy(net))
 
-        num_episodes = 1200
+        num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
             reward, loss = trainer.train(render=magic)
