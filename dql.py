@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import make_grid
 
 import skvideo.io
 
@@ -42,7 +43,7 @@ class AtariNet(nn.Module):
         self.conv1 = nn.Conv2d(4, 32, 8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
-        self.linear1 = nn.Linear(2304, 512)
+        self.linear1 = nn.Linear(3072, 512)
         self.linear2 = nn.Linear(512, env.action_space.n)
 
     def forward(self, x):
@@ -60,10 +61,17 @@ class AtariPre:
         self.lookback = []
 
     def __call__(self, s):
-        s = s[32:196, :, :]
+        # Pong
+        if False:
+            s = s[32:196, :, :]
+
+        # Breakout
+        if True:
+            s = s[26:, :, :]
+
         s = s.astype(np.float32)
         s = s.mean(axis=2)/255.0
-        s = s.reshape((164//2, 2, 160//2, 2)).max(axis=1).max(axis=2)
+        s = s.reshape((-1, 2, 160//2, 2)).max(axis=1).max(axis=2)
         s = np.expand_dims(s, 0)
 
         if len(self.lookback) == 0:
@@ -130,6 +138,10 @@ class DQL:
             self.replay_memory = self.replay_memory[1:]
         self.replay_memory.append(memory)
         self.observation = new_observation
+
+        if self.frame % 1000 == 0:
+            self.writer.add_image("step_observation", make_grid(torch.tensor(np.expand_dims(self.observation, 1))), self.episode)
+            self.writer.add_histogram("step_observation_hist", self.observation.reshape(-1), self.episode)
 
         self.frame += 1
 
