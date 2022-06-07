@@ -460,11 +460,12 @@ def main():
     env = gym.make(args.env, full_action_space=False)
     net = AtariNet(env)
     pre = AtariPre()
-    dql = DQL(env, net, device="cuda", prepare=pre)
 
     if args.first_episode > 0:
         print("loading weights")
         net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
+
+    dql = DQL(env, net, device="cuda", episode=first_episode, prepare=pre)
 
     rewards = []
 
