@@ -1,9 +1,6 @@
 
-# python3 ./dql.py --lr 0.0001 --epsilon_decay 10000 --num_episodes 20000
-
 import os
 import random
-import argparse
 import unittest
 import copy
 
@@ -12,77 +9,23 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 import skvideo.io
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
-parser.add_argument('--first_episode', type=int, default=0)
-parser.add_argument('--num_episodes', type=int, default=10000)
-parser.add_argument('--gamma', type=float, default=0.99)
-parser.add_argument('--lr', type=float, default=0.1)
-parser.add_argument('--epsilon1', type=float, default=1.0)
-parser.add_argument('--epsilon2', type=float, default=0.05)
-parser.add_argument('--epsilon_decay', type=float, default=1000)
-parser.add_argument('--steps_per_batch', type=int, default=256)
-parser.add_argument('--batch_size', type=int, default=256)
-parser.add_argument('--replay_memory_size', type=int, default=200000)
-parser.add_argument('--update_target_every_episodes', type=int, default=25)
 
-if __name__ == '__main__':
-    args = parser.parse_args()
-else:
-    args = parser.parse_args("")
-
-
-class AtariNet(nn.Module):
-    def __init__(self, env):
-        super().__init__()
-        self.conv1 = nn.Conv2d(4, 32, 8, stride=4)
-        self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
-        self.linear1 = nn.Linear(3072, 512)
-        self.linear2 = nn.Linear(512, env.action_space.n)
-
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.reshape((x.shape[0], -1))
-        x = F.relu(self.linear1(x))
-        x = self.linear2(x)
-        return x
-
-
-class AtariPre:
-    def __init__(self):
-        self.lookback = []
-
-    def __call__(self, s):
-        # Pong
-        if False:
-            s = s[32:196, :, :]
-
-        # Breakout
-        if True:
-            s = s[26:, :, :]
-
-        s = s.astype(np.float32)
-        s = s.mean(axis=2)/255.0
-        s = s.reshape((-1, 2, 160//2, 2)).max(axis=1).max(axis=2)
-        s = np.expand_dims(s, 0)
-
-        if len(self.lookback) == 0:
-            self.lookback = [s, s, s, s]
-
-        self.lookback.append(s)
-        del self.lookback[0]
-
-        return np.concatenate(self.lookback, axis=0).copy()
+class Settings:
+    lr = 0.0001
+    batch_size = 256
+    gamma = 0.9
+    update_target_every_episodes = 25
+    epsilon1 = 1.0
+    epsilon2 = 0.05
+    epsilon_decay = 10000
+    steps_per_batch = 256
+    replay_memory_size = 100000
 
 
 class DQL:
@@ -104,7 +47,7 @@ class DQL:
         self.render_frames = []
 
         self.optimizer = optim.Adam(
-            net.parameters(), lr=args.lr, weight_decay=0.0)
+            net.parameters(), lr=Settings.lr, weight_decay=0.0)
 
         self.writer = SummaryWriter()
 
@@ -136,14 +79,16 @@ class DQL:
             new_observation,
             self.done)
 
-        if len(self.replay_memory) >= args.replay_memory_size:
+        if len(self.replay_memory) >= Settings.replay_memory_size:
             self.replay_memory = self.replay_memory[1:]
         self.replay_memory.append(memory)
         self.observation = new_observation
 
         if self.frame % 1000 == 0:
-            self.writer.add_image("step_observation", make_grid(torch.tensor(np.expand_dims(self.observation, 1))), self.episode)
-            self.writer.add_histogram("step_observation_hist", self.observation.reshape(-1), self.episode)
+            self.writer.add_image("step_observation", make_grid(
+                torch.tensor(np.expand_dims(self.observation, 1))), self.episode)
+            self.writer.add_histogram(
+                "step_observation_hist", self.observation.reshape(-1), self.episode)
 
         self.frame += 1
 
@@ -151,7 +96,7 @@ class DQL:
 
     def optimize(self):
         batch = [random.choice(self.replay_memory)
-                 for i in range(args.batch_size)]
+                 for i in range(Settings.batch_size)]
 
         Xi = []
         Xj = []
@@ -185,7 +130,7 @@ class DQL:
                 y.append(reward)
             else:
                 best = float(qj.cpu().max())
-                y.append(reward + args.gamma * best)
+                y.append(reward + Settings.gamma * best)
 
         y = torch.tensor(y, device=self.device)
 
@@ -197,24 +142,27 @@ class DQL:
 
         return float(loss.detach().cpu())
 
-    def train(self, render=False, steps_per_batch=args.steps_per_batch):
+    def train(self, render=False, steps_per_batch=Settings.steps_per_batch):
         self.observation = self.prepare(self.env.reset())
         self.done = False
 
         rewards = 0.0
         losses = []
 
-        alpha = min(self.episode / args.epsilon_decay, 1.0)
-        self.epsilon = args.epsilon1 + alpha * (args.epsilon2-args.epsilon1)
+        alpha = min(self.episode / Settings.epsilon_decay, 1.0)
+        self.epsilon = Settings.epsilon1 + alpha * \
+            (Settings.epsilon2-Settings.epsilon1)
 
-        if self.episode % args.update_target_every_episodes == 0:
+        if self.episode % Settings.update_target_every_episodes == 0:
             self.target_net.load_state_dict(self.net.state_dict())
 
         while not self.done:
             for i in range(steps_per_batch):
                 rewards += self.step()
-                if self.done: break
-                if render: self.render_frame()
+                if self.done:
+                    break
+                if render:
+                    self.render_frame()
 
             losses.append(self.optimize())
 
@@ -285,26 +233,23 @@ class MockEnv:
 class TestDQL(unittest.TestCase):
     def setUp(self):
         self.save = (
-            args.lr,
-            args.gamma,
-            args.update_target_every_episodes,
-            args.epsilon1,
-            args.epsilon2,
-            args.epsilon_decay,
-            args.stop_epsilon_interp_episodes)
+            Settings.lr,
+            Settings.gamma,
+            Settings.update_target_every_episodes,
+            Settings.epsilon1,
+            Settings.epsilon2,
+            Settings.epsilon_decay)
 
-        args.update_target_every_episodes = 100
-        args.epsilon_decay = 100
-        args.stop_epsilon_interp_episodes = 1000
+        Settings.update_target_every_episodes = 100
+        Settings.epsilon_decay = 100
 
     def tearDown(self):
-        (args.lr,
-         args.gamma,
-         args.update_target_every_episodes,
-         args.epsilon1,
-         args.epsilon2,
-         args.epsilon_decay,
-        args.stop_epsilon_interp_episodes) = self.save
+        (Settings.lr,
+         Settings.gamma,
+         Settings.update_target_every_episodes,
+         Settings.epsilon1,
+         Settings.epsilon2,
+         Settings.epsilon_decay) = self.save
 
     def test_select_action(self):
         class Net(nn.Module):
@@ -325,7 +270,7 @@ class TestDQL(unittest.TestCase):
         self.assertEqual(trainer.select_action(), 1)
 
     def test_deterministic(self):
-        args.lr = 0.005
+        Settings.lr = 0.005
 
         env = MockEnv(randomized=False)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -357,7 +302,7 @@ class TestDQL(unittest.TestCase):
         self.assertEqual(trainer.select_action(), 1)
 
     def test_overfit(self):
-        args.lr = 0.005
+        Settings.lr = 0.005
 
         env = MockEnv(randomized=False)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -389,7 +334,7 @@ class TestDQL(unittest.TestCase):
         self.assertEqual(trainer.select_action(), 1)
 
     def test_randomized(self):
-        args.lr = 0.005
+        Settings.lr = 0.005
 
         env = MockEnv(randomized=True)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -432,7 +377,7 @@ class TestDQL(unittest.TestCase):
     def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        args.lr = 0.001
+        Settings.lr = 0.001
 
         env = gym.make("CartPole-v1")
 
@@ -458,34 +403,5 @@ class TestDQL(unittest.TestCase):
         self.assertGreater(reward, 200)
 
 
-def main():
-    env = gym.make(args.env, full_action_space=False)
-    net = AtariNet(env)
-    pre = AtariPre()
-
-    if args.first_episode > 0:
-        print("loading weights")
-        net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
-
-    dql = DQL(env, net, device="cuda", episode=args.first_episode, prepare=pre)
-
-    rewards = []
-
-    for episode in range(args.first_episode, args.num_episodes):
-        magic = (episode % 100 == 0)
-
-        reward, loss = dql.train(render=magic)
-        rewards.append(reward)
-        if len(rewards) > 100:
-            del rewards[0]
-
-        print("episode %6d, loss = %3.6f, reward = %3.6f, mean_reward = %3.6f, epsilon = %.6f" %
-              (episode, loss, reward, np.mean(rewards), dql.epsilon))
-
-        if magic:
-            dql.write_video(episode)
-            torch.save(net.state_dict(), "episode_%06d" % episode)
-
-
 if __name__ == '__main__':
-    main()
+    unittest.main()
