@@ -1,4 +1,6 @@
 
+# python3 ./dql.py --lr 0.0001 --epsilon_decay 10000 --num_episodes 20000
+
 import os
 import random
 import argparse
@@ -465,7 +467,7 @@ def main():
         print("loading weights")
         net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
 
-    dql = DQL(env, net, device="cuda", episode=first_episode, prepare=pre)
+    dql = DQL(env, net, device="cuda", episode=args.first_episode, prepare=pre)
 
     rewards = []
 
