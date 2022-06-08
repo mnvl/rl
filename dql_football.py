@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import dql
 
 dql.Settings.replay_memory_size = 1000000
+dql.Settings.lr = 0.00001
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--first_episode', type=int, default=0)
@@ -41,7 +42,7 @@ def main():
         stacked=True,
         representation = "simple115v2",
         write_video=True,
-        dump_frequency=10,
+        dump_frequency=100,
         write_full_episode_dumps=True,
         render=False,
         logdir="logs")
@@ -58,7 +59,7 @@ def main():
     rewards = []
 
     for episode in range(args.first_episode, args.num_episodes):
-        magic = (episode % 10 == 0)
+        magic = (episode % 100 == 0)
 
         reward, loss = trainer.train()
         rewards.append(reward)
