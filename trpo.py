@@ -31,7 +31,6 @@ class TRPO:
         self.net = net.to(self.device)
         self.prepare = prepare
 
-        self.kl_loss = nn.KLDivLoss()
         self.optimizer = optim.Adam(
             net.parameters(), lr=Settings.lr, weight_decay=0.0)
 
@@ -89,21 +88,17 @@ class TRPO:
         A = np.array(A)
         R = np.array(R)
 
-        self.optimizer.zero_grad()
-
         S = torch.Tensor(S, device=self.device)
         A = torch.LongTensor(A, device=self.device)
         R = torch.Tensor(R, device=self.device)
 
-        scores = self.net(S)
+        self.optimizer.zero_grad()
 
-        pi = torch.softmax(scores, dim=0)
+        pi = self.net(S)
+        pi = torch.softmax(pi, dim=0)
         pi = pi[range(S.shape[0]), A]
 
-        pi_old = pi.detach()
-
-        loss = pi * R / pi_old - Settings.lagrange * self.kl_loss(pi_old, pi)
-        loss = torch.mean(loss)
+        loss = torch.mean(pi * R)
 
         loss.backward()
         self.optimizer.step()
@@ -209,7 +204,8 @@ class TestTRPO(unittest.TestCase):
         self.assertEqual(trainer.select_action(), 1)
 
     def test_deterministic(self):
-        Settings.lr = 0.01
+        Settings.lr = 0.0001
+        Settings.temp = 2.0
 
         env = MockEnv(randomized=False)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
