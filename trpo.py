@@ -20,7 +20,8 @@ import skvideo.io
 class Settings:
     lr = 0.001
     temp = 1.0
-    gamma = 0.99
+    gamma = 0.9
+    lagrange = 0.1
 
 
 class TRPO:
@@ -30,6 +31,7 @@ class TRPO:
         self.net = net.to(self.device)
         self.prepare = prepare
 
+        self.kl_loss = nn.KLDivLoss()
         self.optimizer = optim.Adam(
             net.parameters(), lr=Settings.lr, weight_decay=0.0)
 
@@ -40,8 +42,8 @@ class TRPO:
     def select_action(self, observation):
         s = np.expand_dims(observation, 0)
         with torch.no_grad():
-            log_pi = self.net(torch.tensor(s, device=self.device))
-        distr = D.Categorical(probs = torch.exp(log_pi[0] / Settings.temp))
+            scores = self.net(torch.tensor(s, device=self.device))
+        distr = D.Categorical(probs = torch.softmax(scores[0] / Settings.temp, axis = 0))
         action = distr.sample()
         return action
 
@@ -71,11 +73,17 @@ class TRPO:
         S = []
         R = []
         A = []
+
         for observation, action, reward in episode:
             observation = np.expand_dims(observation, 0)
             S.append(observation)
             A.append(action)
-            R.append(reward)
+
+        G = 0
+        for observation, action, reward in reversed(episode):
+            G = Settings.gamma * G + reward
+            R.append(G)
+        R = list(reversed(R))
 
         S = np.concatenate(S, axis = 0)
         A = np.array(A)
@@ -87,11 +95,14 @@ class TRPO:
         A = torch.LongTensor(A, device=self.device)
         R = torch.Tensor(R, device=self.device)
 
-        log_pi = self.net(S)
-        pi = torch.softmax(log_pi, dim=0)
+        scores = self.net(S)
+
+        pi = torch.softmax(scores, dim=0)
         pi = pi[range(S.shape[0]), A]
 
-        loss = R / pi
+        pi_old = pi.detach()
+
+        loss = pi * R / pi_old - Settings.lagrange * self.kl_loss(pi_old, pi)
         loss = torch.mean(loss)
 
         loss.backward()
@@ -174,9 +185,6 @@ class TestTRPO(unittest.TestCase):
             Settings.temp,
             Settings.gamma)
 
-        Settings.update_target_every_episodes = 100
-        Settings.epsilon_decay = 100
-
     def tearDown(self):
         (Settings.lr,
          Settings.temp,
@@ -201,7 +209,7 @@ class TestTRPO(unittest.TestCase):
         self.assertEqual(trainer.select_action(), 1)
 
     def test_deterministic(self):
-        Settings.lr = 0.005
+        Settings.lr = 0.01
 
         env = MockEnv(randomized=False)
         net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
@@ -216,7 +224,6 @@ class TestTRPO(unittest.TestCase):
         X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
         y = net(X)
-
         print(y)
 
         # take 10 if we have 0
