@@ -85,7 +85,7 @@ class VPG:
 
         G = 0
         for observation, action, reward, done in reversed(episode):
-            if done: G = 0.0
+            if done: G = 0
             G = Settings.gamma * G + reward
             R.append(G)
         R = list(reversed(R))
@@ -100,6 +100,8 @@ class VPG:
 
         with torch.no_grad():
             V = self.v_net(S)
+
+        V = 0.0
 
         self.optimizer_pi.zero_grad()
         scores = self.pi_net(S)
