@@ -101,8 +101,6 @@ class VPG:
         with torch.no_grad():
             V = self.v_net(S)
 
-        V = 0.0
-
         self.optimizer_pi.zero_grad()
         scores = self.pi_net(S)
         log_pi = torch.log_softmax(scores, axis=1)
