@@ -83,7 +83,7 @@ def main():
         print(i, reward, cpi_loss, kl_loss, v_loss, loss)
 
         if magic:
-            trainer.write_video("step_%06d.avi" % i)
+            trainer.write_video(filename = "step_%06d.avi" % i)
             torch.save(net.state_dict(), "step_%06d" % i)
 
 
