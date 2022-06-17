@@ -133,9 +133,9 @@ class PPO(BasicAlgorithm):
     def train(self, render=False):
         frames = self.sample_frames(render)
 
-        cpi_loss, kl_loss, v_loss, loss = self.optimize(frames)
+        clip_loss, kl_loss, v_loss, loss = self.optimize(frames)
 
-        self.writer.add_scalar("cpi_loss", cpi_loss, self.step)
+        self.writer.add_scalar("clip_loss", clip_loss, self.step)
         self.writer.add_scalar("kl_loss", kl_loss, self.step)
         self.writer.add_scalar("v_loss", v_loss, self.step)
         self.writer.add_scalar("loss", v_loss, self.step)
@@ -143,7 +143,7 @@ class PPO(BasicAlgorithm):
 
         self.step += 1
 
-        return self.last_episode_rewards, cpi_loss, kl_loss, v_loss, loss
+        return self.last_episode_rewards, clip_loss, kl_loss, v_loss, loss
 
 
 class TestPPO(unittest.TestCase):
@@ -194,7 +194,7 @@ class TestPPO(unittest.TestCase):
         trainer = PPO(env, net)
 
         for i in range(20):
-            reward, cpi_loss, kl_loss, v_loss, loss = trainer.train()
+            reward, clip_loss, kl_loss, v_loss, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
                       trainer.episodes_seen, reward, clip_loss, kl_loss, v_loss)
