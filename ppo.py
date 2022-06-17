@@ -83,46 +83,43 @@ class PPO(BasicAlgorithm):
         return frames
 
     def optimize(self, frames):
-        S = []
-        R = []
-        A = []
+        observations = []
+        rewards = []
+        actions = []
         pi_old = []
 
         for observation, action, pi, reward, done in frames:
-            S.append(np.expand_dims(observation, 0))
-            A.append(action)
-            pi_old.append(np.expand_dims(pi, 0))
+            observations.append(torch.Tensor(np.expand_dims(observation, 0)))
+            actions.append(action)
+            pi_old.append(torch.Tensor(np.expand_dims(pi, 0)))
 
         discounted_reward = 0.0
         for observation, action, prob, reward, done in reversed(frames):
             if done:
                 discounted_reward = 0.0
             discounted_reward = Settings.gamma * discounted_reward + reward
-            R.append(discounted_reward)
-        R = list(reversed(R))
+            rewards.append(discounted_reward)
+        rewards = list(reversed(rewards))
 
-        S = np.concatenate(S, axis=0)
-        A = np.array(A)
-        R = np.array(R)
-        pi_old = np.concatenate(pi_old, axis=0)
+        observations = torch.cat(observations, axis=0).to(self.device)
+        actions = torch.LongTensor(actions).to(self.device)
+        rewards = torch.Tensor(rewards).to(self.device)
+        pi_old = torch.cat(pi_old, axis=0).to(self.device)
 
-        S = torch.Tensor(S).to(self.device)
-        A = torch.LongTensor(A).to(self.device)
-        R = torch.Tensor(R).to(self.device)
-        pi_old = torch.Tensor(pi_old).to(self.device)
+        N = observations.shape[0]
 
         self.optimizer.zero_grad()
 
-        scores, V = self.net(S)
+        scores, V = self.net(observations)
 
         pi = torch.softmax(scores/Settings.temp, axis=1)
-        rate = pi[range(S.shape[0]), A] / pi_old[range(S.shape[0]), A]
-        loss_cpi = -torch.mean(rate * (R - V.detach()))
+        rate = pi[range(N), actions] / pi_old[range(N), actions]
+        loss_cpi = -torch.mean(rate * (rewards - V.detach()))
 
         log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
         loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
 
-        loss_v = torch.mean(torch.square(R - V))
+        loss_v = torch.mean(torch.square(rewards - V))
 
         loss = loss_cpi + Settings.beta * loss_kl + Settings.c_v * loss_v
 
@@ -195,7 +192,7 @@ class TestPPO(unittest.TestCase):
         trainer = PPO(env, net)
 
         for i in range(100):
-            reward, cpi_loss, kl_loss, v_loss = trainer.train()
+            reward, cpi_loss, kl_loss, v_loss, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
                       trainer.episodes_seen, reward, cpi_loss, kl_loss, v_loss)
@@ -239,7 +236,7 @@ class TestPPO(unittest.TestCase):
         n = 200
         for i in range(n):
             magic = (i == n - 1)
-            reward, cpi_loss, kl_loss, v_loss = trainer.train(render=magic)
+            reward, cpi_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
 
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
