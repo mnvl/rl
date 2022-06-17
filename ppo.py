@@ -44,6 +44,9 @@ class PPO(BasicAlgorithm):
         self.episodes_seen = 0
         self.step = 0
 
+        self.last_episode_rewards = 0
+        self.episode_rewards = 0
+
     def select_action(self):
         s = np.expand_dims(self.observation, 0)
         with torch.no_grad():
@@ -68,10 +71,14 @@ class PPO(BasicAlgorithm):
             frames.append((self.observation, action, prob, reward, self.done))
             self.observation = new_observation
 
+            self.episode_rewards += reward
+            if self.done:
+                self.last_episode_rewards = self.episode_rewards
+                self.episode_rewards = 0
+
             self.frames_seen += 1
 
-            if render:
-                self.render_frame()
+            if render: self.render_frame()
 
         return frames
 
@@ -80,8 +87,6 @@ class PPO(BasicAlgorithm):
         R = []
         A = []
         pi_old = []
-
-        max_reward = 0
 
         for observation, action, pi, reward, done in frames:
             S.append(np.expand_dims(observation, 0))
@@ -93,7 +98,6 @@ class PPO(BasicAlgorithm):
             if done:
                 discounted_reward = 0.0
             discounted_reward = Settings.gamma * discounted_reward + reward
-            max_reward = max(discounted_reward, max_reward)
             R.append(discounted_reward)
         R = list(reversed(R))
 
@@ -125,21 +129,21 @@ class PPO(BasicAlgorithm):
         loss.backward()
         self.optimizer.step()
 
-        return max_reward, float(loss_cpi), float(loss_kl), float(loss_v)
+        return float(loss_cpi), float(loss_kl), float(loss_v)
 
     def train(self, render=False):
         frames = self.sample_frames(render)
 
-        rewards, cpi_loss, kl_loss, v_loss = self.optimize(frames)
+        cpi_loss, kl_loss, v_loss = self.optimize(frames)
 
         self.writer.add_scalar("cpi_loss", cpi_loss, self.step)
         self.writer.add_scalar("kl_loss", kl_loss, self.step)
         self.writer.add_scalar("v_loss", v_loss, self.step)
-        self.writer.add_scalar("reward", rewards, self.step)
+        self.writer.add_scalar("reward", self.last_episode_rewards, self.step)
 
         self.step += 1
 
-        return rewards, cpi_loss, kl_loss, v_loss
+        return self.last_episode_rewards, cpi_loss, kl_loss, v_loss
 
 
 class TestPPO(unittest.TestCase):
@@ -210,7 +214,7 @@ class TestPPO(unittest.TestCase):
     def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        Settings.lr = 0.005
+        Settings.lr = 0.01
 
         env = gym.make("CartPole-v1")
 
@@ -242,7 +246,7 @@ class TestPPO(unittest.TestCase):
 
         trainer.write_video(filename="test_cartpole.mp4")
 
-        self.assertGreater(reward, 95)
+        self.assertGreater(reward, 400)
 
 
 if __name__ == '__main__':
