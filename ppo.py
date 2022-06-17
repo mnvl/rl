@@ -18,11 +18,11 @@ class Settings:
     lr = 0.001
     temp = 1.0
     gamma = 0.99
-    epsilon = 0.2
-    beta = 1.0
 
     sample_frames = 1024
 
+    epsilon = 0.2
+    beta = 0.0
     c_v = 0.1
 
 
@@ -114,19 +114,21 @@ class PPO(BasicAlgorithm):
 
         pi = torch.softmax(scores/Settings.temp, axis=1)
         rate = pi[range(N), actions] / pi_old[range(N), actions]
-        loss_cpi = -torch.mean(rate * (rewards - V.detach()))
+        clipped_rate = torch.clip(rate, 1.0 - Settings.epsilon, 1.0 + Settings.epsilon)
+        adv = rewards - V.detach()
+        loss_clip = -torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
         loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
 
         loss_v = torch.mean(torch.square(rewards - V))
 
-        loss = loss_cpi + Settings.beta * loss_kl + Settings.c_v * loss_v
+        loss = loss_clip + Settings.beta * loss_kl + Settings.c_v * loss_v
 
         loss.backward()
         self.optimizer.step()
 
-        return float(loss_cpi), float(loss_kl), float(loss_v), float(loss)
+        return float(loss_clip), float(loss_kl), float(loss_v), float(loss)
 
     def train(self, render=False):
         frames = self.sample_frames(render)
@@ -191,7 +193,7 @@ class TestPPO(unittest.TestCase):
 
         trainer = PPO(env, net)
 
-        for i in range(100):
+        for i in range(20):
             reward, cpi_loss, kl_loss, v_loss, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
@@ -213,6 +215,7 @@ class TestPPO(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         Settings.lr = 0.01
+        Settings.c_v = 0.001
 
         env = gym.make("CartPole-v1")
 
@@ -233,7 +236,7 @@ class TestPPO(unittest.TestCase):
 
         trainer = PPO(env, net)
 
-        n = 200
+        n = 100
         for i in range(n):
             magic = (i == n - 1)
             reward, cpi_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
