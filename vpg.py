@@ -22,7 +22,7 @@ class Settings:
     lr_pi = 0.001
     lr_v = 0.001
     temp = 1.0
-    gamma = 0.9
+    gamma = 0.99
     lagrange = 0.1
 
 
@@ -66,9 +66,9 @@ class VPG:
         while not done:
             action = self.select_action(observation)
 
-            new_observation, reward, done, _ = self.env.step(action)
+            new_observation, reward, done, _ = self.env.step(int(action))
 
-            episode.append((observation, action, reward))
+            episode.append((observation, action, reward, done))
             new_observation = observation
 
         return episode
@@ -78,13 +78,14 @@ class VPG:
         R = []
         A = []
 
-        for observation, action, reward in episode:
+        for observation, action, reward, done in episode:
             observation = np.expand_dims(observation, 0)
             S.append(observation)
             A.append(action)
 
         G = 0
-        for observation, action, reward in reversed(episode):
+        for observation, action, reward, done in reversed(episode):
+            if done: G = 0.0
             G = Settings.gamma * G + reward
             R.append(G)
         R = list(reversed(R))
@@ -107,31 +108,35 @@ class VPG:
         loss = -torch.mean(log_pi * (R - V))
         loss.backward()
         self.optimizer_pi.step()
+        pi_loss = loss.detach()
 
-        loss1 = loss.detach()
-
-        for i in range(10):
+        for i in range(20):
             self.optimizer_v.zero_grad()
             V = self.v_net(S)
             loss = torch.mean(torch.square(V - R))
             loss.backward()
             self.optimizer_v.step()
-        loss2 = loss.detach()
+        v_loss = loss.detach()
 
-        return float(loss1 + loss2)
+        return float(pi_loss), float(v_loss)
 
     def train(self, render=False):
-        episode = self.sample_episode()
-        loss = self.optimize(episode)
+        episodes = []
+        for i in range(10):
+            episode = self.sample_episode()
+            episodes.extend(episode)
 
-        rewards = sum([reward for observation, action, reward in episode])
+        pi_loss, v_loss = self.optimize(episodes)
 
-        self.writer.add_scalar("loss", loss, self.episode)
+        rewards = sum([reward for observation, action, reward, done in episodes]) / 100.0
+
+        self.writer.add_scalar("pi_loss", pi_loss, self.episode)
+        self.writer.add_scalar("v_loss", v_loss, self.episode)
         self.writer.add_scalar("reward", rewards, self.episode)
 
         self.episode += 1
 
-        return rewards, loss
+        return rewards, pi_loss, v_loss
 
     def write_video(self, episode=None, filename=None):
         if episode is not None:
@@ -158,7 +163,7 @@ class MockEnv:
     def reset(self):
         self.state = 0.0
         self.done = False
-        return np.array([np.random.normal(), 0.0]).astype(np.float32)
+        return np.array([0.0, 0.0]).astype(np.float32)
 
     def step(self, action):
         assert action >= 0 and action < 3
@@ -206,7 +211,6 @@ class TestVPG(unittest.TestCase):
         class Net(nn.Module):
             def __init__(self):
                 super().__init__()
-                self.linear = nn.Linear(2, 3)
 
             def forward(self, x):
                 x = self.linear(x)
@@ -219,25 +223,28 @@ class TestVPG(unittest.TestCase):
         self.assertEqual(trainer.select_action(trainer.env.reset()), 1)
 
     def test_deterministic(self):
-        Settings.lr_pi = 0.00001
-        Settings.lr_v = 0.00001
+        Settings.lr_pi = 0.1
+        Settings.lr_v = 0.01
 
         env = MockEnv(randomized=False)
         pi_net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
-        v_net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 1))
+        v_net = nn.Sequential(nn.Linear(2, 10), nn.LeakyReLU(), nn.Linear(10, 1))
 
         trainer = VPG(env, pi_net, v_net)
 
         rewards = []
-        losses = []
+        pi_losses = []
+        v_losses = []
         for i in range(20000):
-            reward, loss = trainer.train()
+            reward, pi_loss, v_loss = trainer.train()
             rewards.append(reward)
-            losses.append(loss)
+            pi_losses.append(pi_loss)
+            v_losses.append(v_loss)
             if i % 100 == 0:
-                print("deterministic", np.mean(rewards), np.mean(losses))
+                print("deterministic", np.mean(rewards), np.mean(pi_losses), np.mean(v_losses))
                 rewards = []
-                losses = []
+                pi_losses = []
+                v_losses = []
 
         X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
@@ -333,26 +340,29 @@ class TestVPG(unittest.TestCase):
     def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        Settings.lr = 0.001
-
         env = gym.make("CartPole-v1")
 
-        net = nn.Sequential(
+        pi_net = nn.Sequential(
             nn.Linear(4, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, env.action_space.n))
-
-        trainer = DQL(env, net, copy.deepcopy(net))
+        v_net = nn.Sequential(
+            nn.Linear(4, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1))
+        trainer = VPG(env, pi_net, v_net)
 
         num_episodes = 2000
         for i in range(num_episodes):
             magic = (i > num_episodes - 5)
-            reward, loss = trainer.train(render=magic)
+            reward, pi_loss, v_loss = trainer.train(render=magic)
 
             if i % 100 == 0 or magic:
-                print("cartpole", i, reward, loss)
+                print("cartpole", i, reward, pi_loss, v_loss)
 
         trainer.write_video(filename="test_cartpole.mp4")
 
