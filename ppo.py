@@ -210,8 +210,7 @@ class TestPPO(unittest.TestCase):
     def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        Settings.lr = 0.01
-        Settings.beta = 1.0
+        Settings.lr = 0.005
 
         env = gym.make("CartPole-v1")
 
@@ -232,7 +231,7 @@ class TestPPO(unittest.TestCase):
 
         trainer = PPO(env, net)
 
-        n = 100
+        n = 200
         for i in range(n):
             magic = (i == n - 1)
             reward, cpi_loss, kl_loss, v_loss = trainer.train(render=magic)
