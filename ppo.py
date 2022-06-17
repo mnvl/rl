@@ -54,14 +54,14 @@ class PPO(BasicAlgorithm):
         probs = torch.softmax(scores[0] / Settings.temp, axis=0)
         distr = D.Categorical(probs=probs)
         action = distr.sample()
-        return action, probs
+        return action.cpu(), probs.cpu()
 
     def sample_frames(self, render):
         frames = []
 
         for i in range(Settings.sample_frames):
             if self.done:
-                self.observation = self.env.reset()
+                self.observation = self.prepare(self.env.reset())
                 self.done = False
                 self.episodes_seen += 1
 
@@ -69,7 +69,7 @@ class PPO(BasicAlgorithm):
             new_observation, reward, self.done, _ = self.env.step(int(action))
 
             frames.append((self.observation, action, prob, reward, self.done))
-            self.observation = new_observation
+            self.observation = self.prepare(new_observation)
 
             self.episode_rewards += reward
             if self.done:
@@ -106,10 +106,10 @@ class PPO(BasicAlgorithm):
         R = np.array(R)
         pi_old = np.concatenate(pi_old, axis=0)
 
-        S = torch.Tensor(S, device=self.device)
-        A = torch.LongTensor(A, device=self.device)
-        R = torch.Tensor(R, device=self.device)
-        pi_old = torch.Tensor(pi_old, device=self.device)
+        S = torch.Tensor(S).to(self.device)
+        A = torch.LongTensor(A).to(self.device)
+        R = torch.Tensor(R).to(self.device)
+        pi_old = torch.Tensor(pi_old).to(self.device)
 
         self.optimizer.zero_grad()
 
@@ -129,21 +129,22 @@ class PPO(BasicAlgorithm):
         loss.backward()
         self.optimizer.step()
 
-        return float(loss_cpi), float(loss_kl), float(loss_v)
+        return float(loss_cpi), float(loss_kl), float(loss_v), float(loss)
 
     def train(self, render=False):
         frames = self.sample_frames(render)
 
-        cpi_loss, kl_loss, v_loss = self.optimize(frames)
+        cpi_loss, kl_loss, v_loss, loss = self.optimize(frames)
 
         self.writer.add_scalar("cpi_loss", cpi_loss, self.step)
         self.writer.add_scalar("kl_loss", kl_loss, self.step)
         self.writer.add_scalar("v_loss", v_loss, self.step)
+        self.writer.add_scalar("loss", v_loss, self.step)
         self.writer.add_scalar("reward", self.last_episode_rewards, self.step)
 
         self.step += 1
 
-        return self.last_episode_rewards, cpi_loss, kl_loss, v_loss
+        return self.last_episode_rewards, cpi_loss, kl_loss, v_loss, loss
 
 
 class TestPPO(unittest.TestCase):
