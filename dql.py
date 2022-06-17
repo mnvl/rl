@@ -10,10 +10,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
-import skvideo.io
+from basic_algorithm import BasicAlgorithm, MarsRoverEnv
 
 
 class Settings:
@@ -28,8 +27,10 @@ class Settings:
     replay_memory_size = 100000
 
 
-class DQL:
+class DQL(BasicAlgorithm):
     def __init__(self, env, net, target_net=None, episode=0, device="cpu", prepare=lambda x: x):
+        BasicAlgorithm.__init__(self)
+
         if target_net is None:
             target_net = copy.deepcopy(net)
 
@@ -44,12 +45,8 @@ class DQL:
         self.episode = episode
         self.frame = 0
 
-        self.render_frames = []
-
         self.optimizer = optim.Adam(
             net.parameters(), lr=Settings.lr, weight_decay=0.0)
-
-        self.writer = SummaryWriter()
 
     def select_action(self):
         if random.random() < self.epsilon:
@@ -59,12 +56,6 @@ class DQL:
         with torch.no_grad():
             Q = self.net(torch.tensor(X, device=self.device))
         return int(np.argmax(Q.cpu().numpy()[0]))
-
-    def render_frame(self):
-        image = self.env.render(mode="rgb_array")
-        image = image.copy()
-        image = np.expand_dims(image, axis=0)
-        self.render_frames.append(image)
 
     def step(self):
         action = self.select_action()
@@ -175,60 +166,6 @@ class DQL:
 
         return rewards, loss
 
-    def write_video(self, episode=None, filename=None):
-        if episode is not None:
-            filename = "episode_%06d.mp4" % episode
-
-        images = np.concatenate(self.render_frames, axis=0)
-        images = (images * 255).astype(np.uint8)
-
-        skvideo.io.vwrite(filename, images)
-
-        print("wrote %s from %s" % (filename, str(images.shape)))
-
-        self.render_frames = []
-
-
-class MockEnv:
-    class action_space:
-        n = 3
-
-    def __init__(self, randomized):
-        self.randomized = randomized
-        self.reset()
-
-    def reset(self):
-        self.state = 0.0
-        self.done = False
-        return np.array([np.random.normal(), 0.0]).astype(np.float32)
-
-    def step(self, action):
-        assert action >= 0 and action < 3
-
-        if action == 0 and not self.done:
-            self.state += 100
-
-        if action == 1 and not self.done:
-            if self.randomized:
-                self.state += random.randint(1, 10)
-            else:
-                self.state += 10
-
-        if action == 2:
-            self.done = True
-
-        if self.state > 21 or self.state < 0:
-            self.done = True
-
-        reward = 0.0
-        if self.done and self.state > 0 and self.state <= 21:
-            reward = self.state
-
-        observation = np.array(
-            [self.state, self.done]).astype(np.float32)
-
-        return observation, reward, self.done, None
-
 
 class TestDQL(unittest.TestCase):
     def setUp(self):
@@ -269,110 +206,27 @@ class TestDQL(unittest.TestCase):
         trainer.epsilon = 0.0
         self.assertEqual(trainer.select_action(), 1)
 
-    def test_deterministic(self):
+    def test_mars_rover(self):
         Settings.lr = 0.005
 
-        env = MockEnv(randomized=False)
-        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+        env = MarsRoverEnv()
+        net = nn.Sequential(nn.Linear(5, 10), nn.ReLU(), nn.Linear(10, 2))
 
         trainer = DQL(env, net)
 
-        for i in range(2000):
+        for i in range(500):
             rewards, loss = trainer.train()
             if i % 100 == 0:
                 print("deterministic", rewards, loss)
 
-        X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
-            torch.float32)
-        y = net(X)
+        X = torch.eye(5).type(torch.float32)
+        Q = net(X)
 
-        print(y)
+        print(Q)
 
-        # take 10 if we have 0
-        self.assertEqual(torch.argmax(y[0, :]), 1)
-
-        # take 10 if we have 10
-        self.assertEqual(torch.argmax(y[1, :]), 1)
-
-        # finish if we have 20
-        self.assertEqual(torch.argmax(y[2, :]), 2)
-
-        trainer.observation = env.reset()
-        trainer.epsilon = 0.0
-        self.assertEqual(trainer.select_action(), 1)
-
-    def test_overfit(self):
-        Settings.lr = 0.005
-
-        env = MockEnv(randomized=False)
-        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
-
-        trainer = DQL(env, net)
-
-        for i in range(10000):
-            rewards, loss = trainer.train()
-            if i % 100 == 0:
-                print("overfit", rewards, loss)
-
-        X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
-            torch.float32)
-        y = net(X)
-
-        print(y)
-
-        # take 10 if we have 0
-        self.assertEqual(torch.argmax(y[0, :]), 1)
-
-        # take 10 if we have 10
-        self.assertEqual(torch.argmax(y[1, :]), 1)
-
-        # finish if we have 20
-        self.assertEqual(torch.argmax(y[2, :]), 2)
-
-        trainer.observation = env.reset()
-        trainer.epsilon = 0.0
-        self.assertEqual(trainer.select_action(), 1)
-
-    def test_randomized(self):
-        Settings.lr = 0.005
-
-        env = MockEnv(randomized=True)
-        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
-
-        trainer = DQL(env, net)
-
-        for i in range(5000):
-            rewards, loss = trainer.train()
-            if i % 100 == 0:
-                print("randomized", rewards, loss)
-
-        X = torch.tensor([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [12.0, 0.0], [18.0, 0.0], [20.0, 0.0]]).type(
-            torch.float32)
-        y = net(X)
-
-        print(y)
-
-        # take if we have 0
-        self.assertEqual(torch.argmax(y[0, :]), 1)
-
-        # take if we have 5
-        self.assertEqual(torch.argmax(y[1, :]), 1)
-
-        # take if we have 10
-        self.assertEqual(torch.argmax(y[2, :]), 1)
-
-        # take if we have 12
-        self.assertEqual(torch.argmax(y[3, :]), 1)
-
-        # finish if we have 18
-        self.assertEqual(torch.argmax(y[4, :]), 2)
-
-        # finish if we have 20
-        self.assertEqual(torch.argmax(y[5, :]), 2)
-
-        trainer.observation = env.reset()
-        trainer.epsilon = 0.0
-        self.assertEqual(trainer.select_action(), 1)
+        self.assertEqual(torch.argmax(Q[1, :]), 1)
+        self.assertEqual(torch.argmax(Q[2, :]), 1)
+        self.assertEqual(torch.argmax(Q[3, :]), 1)
 
     def test_cartpole(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"

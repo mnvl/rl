@@ -84,7 +84,7 @@ def train(episode):
             optimizer.zero_grad()
 
             loss = 0.0
-    
+
             G = 0.0
             for observation, action, reward in reversed(history):
                 G = G * args.gamma + reward
