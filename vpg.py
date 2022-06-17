@@ -9,6 +9,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributions as D
 from torch.utils.tensorboard import SummaryWriter
@@ -18,21 +19,25 @@ import skvideo.io
 
 
 class Settings:
-    lr = 0.001
+    lr_pi = 0.001
+    lr_v = 0.001
     temp = 1.0
     gamma = 0.9
     lagrange = 0.1
 
 
-class TRPO:
-    def __init__(self, env, net, episode=0, device="cpu", prepare=lambda x: x):
+class VPG:
+    def __init__(self, env, pi_net, v_net, episode=0, device="cpu", prepare=lambda x: x):
         self.env = env
         self.device = torch.device(device)
-        self.net = net.to(self.device)
+        self.pi_net = pi_net.to(self.device)
+        self.v_net = v_net.to(self.device)
         self.prepare = prepare
 
-        self.optimizer = optim.Adam(
-            net.parameters(), lr=Settings.lr, weight_decay=0.0)
+        self.optimizer_pi = optim.Adam(
+            pi_net.parameters(), lr=Settings.lr_pi, weight_decay=0.0)
+        self.optimizer_v = optim.Adam(
+            v_net.parameters(), lr=Settings.lr_v, weight_decay=0.0)
 
         self.episode = episode
 
@@ -41,8 +46,8 @@ class TRPO:
     def select_action(self, observation):
         s = np.expand_dims(observation, 0)
         with torch.no_grad():
-            scores = self.net(torch.tensor(s, device=self.device))
-        distr = D.Categorical(probs = torch.softmax(scores[0] / Settings.temp, axis = 0))
+            scores = self.pi_net(torch.tensor(s, device=self.device))
+        distr = D.Categorical(probs = torch.softmax(scores[0] / Settings.temp, axis=0))
         action = distr.sample()
         return action
 
@@ -92,24 +97,34 @@ class TRPO:
         A = torch.LongTensor(A, device=self.device)
         R = torch.Tensor(R, device=self.device)
 
-        self.optimizer.zero_grad()
+        with torch.no_grad():
+            V = self.v_net(S)
 
-        pi = self.net(S)
-        pi = torch.softmax(pi, dim=0)
-        pi = pi[range(S.shape[0]), A]
-
-        loss = torch.mean(pi * R)
-
+        self.optimizer_pi.zero_grad()
+        scores = self.pi_net(S)
+        log_pi = torch.log_softmax(scores, axis=1)
+        log_pi = log_pi[range(S.shape[0]), A]
+        loss = -torch.mean(log_pi * (R - V))
         loss.backward()
-        self.optimizer.step()
+        self.optimizer_pi.step()
 
-        return float(loss.detach().cpu())
+        loss1 = loss.detach()
+
+        for i in range(10):
+            self.optimizer_v.zero_grad()
+            V = self.v_net(S)
+            loss = torch.mean(torch.square(V - R))
+            loss.backward()
+            self.optimizer_v.step()
+        loss2 = loss.detach()
+
+        return float(loss1 + loss2)
 
     def train(self, render=False):
         episode = self.sample_episode()
         loss = self.optimize(episode)
 
-        rewards = 0
+        rewards = sum([reward for observation, action, reward in episode])
 
         self.writer.add_scalar("loss", loss, self.episode)
         self.writer.add_scalar("reward", rewards, self.episode)
@@ -173,15 +188,17 @@ class MockEnv:
         return observation, reward, self.done, None
 
 
-class TestTRPO(unittest.TestCase):
+class TestVPG(unittest.TestCase):
     def setUp(self):
         self.save = (
-            Settings.lr,
+            Settings.lr_pi,
+            Settings.lr_v,
             Settings.temp,
             Settings.gamma)
 
     def tearDown(self):
-        (Settings.lr,
+        (Settings.lr_pi,
+         Settings.lr_v,
          Settings.temp,
          Settings.gamma) = self.save
 
@@ -196,30 +213,35 @@ class TestTRPO(unittest.TestCase):
                 x[0, 0] = 0
                 x[0, 1] = 200
                 x[0, 2] = 0
-                return x
+                return 1.0, x
 
-        trainer = DQL(MockEnv(randomized=False), Net())
-        trainer.observation = trainer.env.reset()
-        trainer.epsilon = 0.0
-        self.assertEqual(trainer.select_action(), 1)
+        trainer = VPG(MockEnv(randomized=False), Net())
+        self.assertEqual(trainer.select_action(trainer.env.reset()), 1)
 
     def test_deterministic(self):
-        Settings.lr = 0.0001
-        Settings.temp = 2.0
+        Settings.lr_pi = 0.00001
+        Settings.lr_v = 0.00001
 
         env = MockEnv(randomized=False)
-        net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+        pi_net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 3))
+        v_net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 1))
 
-        trainer = TRPO(env, net)
+        trainer = VPG(env, pi_net, v_net)
 
-        for i in range(2000):
-            rewards, loss = trainer.train()
+        rewards = []
+        losses = []
+        for i in range(20000):
+            reward, loss = trainer.train()
+            rewards.append(reward)
+            losses.append(loss)
             if i % 100 == 0:
-                print("deterministic", rewards, loss)
+                print("deterministic", np.mean(rewards), np.mean(losses))
+                rewards = []
+                losses = []
 
         X = torch.tensor([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]).type(
             torch.float32)
-        y = net(X)
+        y = trainer.pi_net(X)
         print(y)
 
         # take 10 if we have 0
