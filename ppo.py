@@ -197,7 +197,7 @@ class TestPPO(unittest.TestCase):
             reward, cpi_loss, kl_loss, v_loss, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
-                      trainer.episodes_seen, reward, cpi_loss, kl_loss, v_loss)
+                      trainer.episodes_seen, reward, clip_loss, kl_loss, v_loss)
 
         assert reward == 10.0, str(reward)
 
@@ -239,11 +239,11 @@ class TestPPO(unittest.TestCase):
         n = 100
         for i in range(n):
             magic = (i == n - 1)
-            reward, cpi_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
+            reward, clip_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
 
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
-                      trainer.episodes_seen, reward, cpi_loss, kl_loss, v_loss)
+                      trainer.episodes_seen, reward, clip_loss, kl_loss, v_loss)
 
         trainer.write_video(filename="test_cartpole.mp4")
 
