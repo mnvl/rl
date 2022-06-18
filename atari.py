@@ -1,6 +1,6 @@
 
+import sys
 import argparse
-import gym
 
 import numpy as np
 
@@ -8,12 +8,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import gym
+
 import dql
+import ppo
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
-parser.add_argument('--first_episode', type=int, default=0)
-parser.add_argument('--num_episodes', type=int, default=10000)
+parser.add_argument('--algo', type=str, default="ppo")
+parser.add_argument('--lr', type=float, default="0.001")
+parser.add_argument('--load_step', type=int, default=0)
+parser.add_argument('--num_steps', type=int, default=10000)
 
 args = parser.parse_args()
 
@@ -25,7 +30,10 @@ class AtariNet(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
         self.linear1 = nn.Linear(3072, 512)
-        self.linear2 = nn.Linear(512, env.action_space.n)
+        self.fc1 = nn.Linear(512, env.action_space.n)
+
+        if args.algo == "ppo":
+            self.fc2 = nn.Linear(512, 1)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -33,8 +41,11 @@ class AtariNet(nn.Module):
         x = F.relu(self.conv3(x))
         x = x.reshape((x.shape[0], -1))
         x = F.relu(self.linear1(x))
-        x = self.linear2(x)
-        return x
+
+        if args.algo == "ppo":
+            return self.fc1(x), self.fc2(x)
+
+        return self.fc1(x)
 
 
 class AtariPre:
@@ -69,28 +80,30 @@ def main():
     net = AtariNet(env)
     pre = AtariPre()
 
-    if args.first_episode > 0:
+    if args.load_step > 0:
         print("loading weights")
-        net.load_state_dict(torch.load("episode_%06d" % args.first_episode))
+        net.load_state_dict(torch.load("step_%06d" % args.first_episode))
 
-    trainer = dql.DQL(env, net, device="cuda", episode=args.first_episode, prepare=pre)
+    if args.algo == "ppo":
+        ppo.Settings.lr = args.lr
+        trainer = ppo.PPO(env, net, device="cuda", prepare=pre)
+    elif args.algo == "dql":
+        dql.Settings.lr = args.lr
+        trainer = dql.DQL(env, net, device="cuda", prepare=pre)
+    else:
+        print("unkonwn algorithm", args.algo)
+        sys.exit(1)
 
-    rewards = []
+    for i in range(args.num_steps):
+        magic = (i % 100 == 0)
 
-    for episode in range(args.first_episode, args.num_episodes):
-        magic = (episode % 100 == 0)
+        reward, cpi_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
 
-        reward, loss = trainer.train(render=magic)
-        rewards.append(reward)
-        if len(rewards) > 100:
-            del rewards[0]
-
-        print("episode %6d, loss = %3.6f, reward = %3.6f, mean_reward = %3.6f, epsilon = %.6f" %
-              (episode, loss, reward, np.mean(rewards), trainer.epsilon))
+        print(i, reward, cpi_loss, kl_loss, v_loss, loss)
 
         if magic:
-            trainer.write_video(episode)
-            torch.save(net.state_dict(), "episode_%06d" % episode)
+            trainer.write_video(filename = "step_%06d.avi" % i)
+            torch.save(net.state_dict(), "step_%06d" % i)
 
 
 if __name__ == '__main__':

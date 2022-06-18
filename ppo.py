@@ -113,9 +113,12 @@ class PPO(BasicAlgorithm):
         scores, V = self.net(observations)
 
         pi = torch.softmax(scores/Settings.temp, axis=1)
+
         rate = pi[range(N), actions] / pi_old[range(N), actions]
         clipped_rate = torch.clip(rate, 1.0 - Settings.epsilon, 1.0 + Settings.epsilon)
+
         adv = rewards - V.detach()
+
         loss_clip = -torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
@@ -133,17 +136,17 @@ class PPO(BasicAlgorithm):
     def train(self, render=False):
         frames = self.sample_frames(render)
 
-        clip_loss, kl_loss, v_loss, loss = self.optimize(frames)
+        loss_clip, loss_kl, loss_v, loss = self.optimize(frames)
 
-        self.writer.add_scalar("clip_loss", clip_loss, self.step)
-        self.writer.add_scalar("kl_loss", kl_loss, self.step)
-        self.writer.add_scalar("v_loss", v_loss, self.step)
-        self.writer.add_scalar("loss", v_loss, self.step)
-        self.writer.add_scalar("reward", self.last_episode_rewards, self.step)
+        self.writer.add_scalar("loss/clip", loss_clip, self.step)
+        self.writer.add_scalar("loss/kl", loss_kl, self.step)
+        self.writer.add_scalar("loss/v", loss_v, self.step)
+        self.writer.add_scalar("loss", loss_v, self.step)
+        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         self.step += 1
 
-        return self.last_episode_rewards, clip_loss, kl_loss, v_loss, loss
+        return self.last_episode_rewards, loss_clip, loss_kl, loss_v, loss
 
 
 class TestPPO(unittest.TestCase):
@@ -194,10 +197,10 @@ class TestPPO(unittest.TestCase):
         trainer = PPO(env, net)
 
         for i in range(20):
-            reward, clip_loss, kl_loss, v_loss, loss = trainer.train()
+            reward, loss_clip, loss_kl, loss_v, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
-                      trainer.episodes_seen, reward, clip_loss, kl_loss, v_loss)
+                      trainer.episodes_seen, reward, loss_clip, loss_kl, loss_v)
 
         assert reward == 10.0, str(reward)
 
@@ -239,11 +242,11 @@ class TestPPO(unittest.TestCase):
         n = 100
         for i in range(n):
             magic = (i == n - 1)
-            reward, clip_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
+            reward, loss_clip, loss_kl, loss_v, loss = trainer.train(render=magic)
 
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
-                      trainer.episodes_seen, reward, clip_loss, kl_loss, v_loss)
+                      trainer.episodes_seen, reward, loss_clip, loss_kl, loss_v)
 
         trainer.write_video(filename="test_cartpole.mp4")
 
