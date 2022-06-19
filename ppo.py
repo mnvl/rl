@@ -163,7 +163,7 @@ class PPO(BasicAlgorithm):
 
         loss = loss_clip - \
             Settings.beta * loss_kl - \
-            Settings.c_value * loss_value - \
+            Settings.c_value * loss_value + \
             Settings.c_entropy * loss_entropy
 
         loss.backward()
@@ -176,7 +176,7 @@ class PPO(BasicAlgorithm):
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/kl", loss_kl, self.step)
         self.writer.add_scalar("loss/value", loss_value, self.step)
-        self.writer.add_scalar("loss/value", loss_entropy, self.step)
+        self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss_value, self.step)
         self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
