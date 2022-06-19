@@ -24,7 +24,8 @@ class Settings:
 
     epsilon = 0.2
     beta = 0.0
-    c_v = 0.1
+    c_value = 0.1
+    c_entropy = 0.01
 
 
 class Actor(BasicActor):
@@ -156,29 +157,34 @@ class PPO(BasicAlgorithm):
         log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
         loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
 
-        loss_v = torch.mean(torch.square(rewards - V))
+        loss_value = torch.mean(torch.square(rewards - V))
 
-        loss = loss_clip - Settings.beta * loss_kl - Settings.c_v * loss_v
+        loss_entropy = -torch.mean(pi * log_pi)
+
+        loss = loss_clip - \
+            Settings.beta * loss_kl - \
+            Settings.c_value * loss_value - \
+            Settings.c_entropy * loss_entropy
 
         loss.backward()
         self.optimizer.step()
 
-        return float(loss_clip), float(loss_kl), float(loss_v), float(loss)
+        self.writer.add_scalar("loss/clip", loss_clip, self.step)
+        self.writer.add_scalar("loss/kl", loss_kl, self.step)
+        self.writer.add_scalar("loss/value", loss_value, self.step)
+        self.writer.add_scalar("loss/value", loss_entropy, self.step)
+        self.writer.add_scalar("loss", loss_value, self.step)
+        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
+
+        return self.last_episode_rewards, float(loss)
 
     def train(self, render=False):
         frames = self.sample_frames(render)
 
-        loss_clip, loss_kl, loss_v, loss = self.optimize(frames)
-
-        self.writer.add_scalar("loss/clip", loss_clip, self.step)
-        self.writer.add_scalar("loss/kl", loss_kl, self.step)
-        self.writer.add_scalar("loss/v", loss_v, self.step)
-        self.writer.add_scalar("loss", loss_v, self.step)
-        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
-
+        rewards, loss = self.optimize(frames)
         self.step += 1
 
-        return self.last_episode_rewards, loss_clip, loss_kl, loss_v, loss
+        return rewards, loss
 
     def write_video(self, episode=None, filename=None):
         self.actors[0].write_video(episode, filename)
@@ -232,12 +238,12 @@ class TestPPO(unittest.TestCase):
         trainer = PPO(env, net)
 
         for i in range(20):
-            reward, loss_clip, loss_kl, loss_v, loss = trainer.train()
+            rewards, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
-                      trainer.episodes_seen, reward, loss_clip, loss_kl, loss_v)
+                      trainer.episodes_seen, rewards, loss)
 
-        assert reward == 10.0, str(reward)
+        assert rewards == 10.0, str(reward)
 
         X = torch.eye(5).type(torch.float32)
         pi, V = net(X)
@@ -253,9 +259,9 @@ class TestPPO(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         Settings.lr = 0.01
-        Settings.c_v = 0.001
+        Settings.c_value = 0.001
 
-        env = lambda: gym.make("CartPole-v1")
+        def env(): return gym.make("CartPole-v1")
 
         class Net(nn.Module):
             def __init__(self):
@@ -277,16 +283,16 @@ class TestPPO(unittest.TestCase):
         n = 100
         for i in range(n):
             magic = (i == n - 1)
-            reward, loss_clip, loss_kl, loss_v, loss = trainer.train(
+            rewards, loss = trainer.train(
                 render=magic)
 
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
-                      trainer.episodes_seen, reward, loss_clip, loss_kl, loss_v)
+                      trainer.episodes_seen, rewards, loss)
 
         trainer.write_video(filename="test_cartpole.mp4")
 
-        self.assertGreater(reward, 400)
+        self.assertGreater(rewards, 400)
 
 
 if __name__ == '__main__':
