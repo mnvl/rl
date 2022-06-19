@@ -10,6 +10,8 @@ import torch.nn.functional as F
 
 import gym
 
+from tqdm import tqdm
+
 import dql
 import ppo
 
@@ -76,9 +78,9 @@ class AtariPre:
 
 
 def main():
-    env = gym.make(args.env, full_action_space=False)
-    net = AtariNet(env)
-    pre = AtariPre()
+    env_fn = lambda: gym.make(args.env, full_action_space=False)
+    net = AtariNet(env_fn())
+    pre_fn = AtariPre()
 
     if args.load_step > 0:
         print("loading weights")
@@ -86,7 +88,7 @@ def main():
 
     if args.algo == "ppo":
         ppo.Settings.lr = args.lr
-        trainer = ppo.PPO(env, net, device="cuda", prepare=pre)
+        trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr
         trainer = dql.DQL(env, net, device="cuda", prepare=pre)
@@ -94,12 +96,14 @@ def main():
         print("unkonwn algorithm", args.algo)
         sys.exit(1)
 
-    for i in range(args.num_steps):
+    pb = tqdm(range(args.num_steps))
+
+    for i in pb:
         magic = (i % 100 == 0)
 
-        reward, cpi_loss, kl_loss, v_loss, loss = trainer.train(render=magic)
+        rewards, loss = trainer.train(render=magic)
 
-        print(i, reward, cpi_loss, kl_loss, v_loss, loss)
+        pb.set_description("%8d %6.6f %6.6f" % (i, rewards, loss))
 
         if magic:
             trainer.write_video(filename = "step_%06d.avi" % i)
