@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributions as D
 
-from basic_algorithm import BasicAlgorithm, MarsRoverEnv
+from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 
 class Settings:
@@ -19,31 +19,26 @@ class Settings:
     temp = 1.0
     gamma = 0.99
 
-    sample_frames = 1024
+    sample_frames = 256
+    num_actors = 8
 
     epsilon = 0.2
     beta = 0.0
     c_v = 0.1
 
 
-class PPO(BasicAlgorithm):
-    def __init__(self, env, net, device="cpu", prepare=lambda x: x):
-        BasicAlgorithm.__init__(self)
+class Actor(BasicActor):
+    def __init__(self, env_fn, prepare_fn, device, net):
+        BasicActor.__init__(self)
 
-        self.env = env
+        self.env = env_fn()
+        self.prepare_fn = prepare_fn
+        self.device = device
+        self.net = net
+
         self.done = True
 
-        self.device = torch.device(device)
-        self.net = net.to(self.device)
-        self.prepare = prepare
-
-        self.optimizer = optim.Adam(
-            self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
-
-        self.frames_seen = 0
         self.episodes_seen = 0
-        self.step = 0
-
         self.last_episode_rewards = 0
         self.episode_rewards = 0
 
@@ -56,12 +51,12 @@ class PPO(BasicAlgorithm):
         action = distr.sample()
         return action.cpu(), probs.cpu()
 
-    def sample_frames(self, render):
+    def sample_frames(self, render=False):
         frames = []
 
         for i in range(Settings.sample_frames):
             if self.done:
-                self.observation = self.prepare(self.env.reset())
+                self.observation = self.prepare_fn(self.env.reset())
                 self.done = False
                 self.episodes_seen += 1
 
@@ -69,16 +64,59 @@ class PPO(BasicAlgorithm):
             new_observation, reward, self.done, _ = self.env.step(int(action))
 
             frames.append((self.observation, action, prob, reward, self.done))
-            self.observation = self.prepare(new_observation)
+            self.observation = self.prepare_fn(new_observation)
 
             self.episode_rewards += reward
             if self.done:
                 self.last_episode_rewards = self.episode_rewards
                 self.episode_rewards = 0
 
-            self.frames_seen += 1
+            if render:
+                self.render_frame()
 
-            if render: self.render_frame()
+        discounted_reward = 0.0
+        for i in range(Settings.sample_frames-1, -1, -1):
+            observation, action, prob, reward, done = frames[i]
+            if done:
+                discounted_reward = 0.0
+            discounted_reward = Settings.gamma * discounted_reward + reward
+            reward = discounted_reward
+            frames[i] = (observation, action, prob, reward, done)
+
+        return frames
+
+
+class PPO(BasicAlgorithm):
+    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda x: x):
+        BasicAlgorithm.__init__(self)
+
+        self.device = torch.device(device)
+        self.net = net.to(self.device)
+        self.prepare_fn = prepare_fn
+
+        self.actors = [Actor(env_fn, prepare_fn, self.device, self.net)
+                       for i in range(Settings.num_actors)]
+
+        self.optimizer = optim.Adam(
+            self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
+
+        self.frames_seen = 0
+        self.step = 0
+        self.last_episode_rewards = 0
+
+    def sample_frames(self, render):
+        self.last_episode_rewards = 0
+        self.episodes_seen = 0
+
+        frames = []
+        for i, actor in enumerate(self.actors):
+            frames.extend(actor.sample_frames(render and i == 0))
+
+            self.last_episode_rewards += actor.last_episode_rewards
+            self.episodes_seen += actor.episodes_seen
+
+        self.last_episode_rewards /= len(self.actors)
+        self.frames_seen += len(frames)
 
         return frames
 
@@ -91,15 +129,8 @@ class PPO(BasicAlgorithm):
         for observation, action, pi, reward, done in frames:
             observations.append(torch.Tensor(np.expand_dims(observation, 0)))
             actions.append(action)
+            rewards.append(reward)
             pi_old.append(torch.Tensor(np.expand_dims(pi, 0)))
-
-        discounted_reward = 0.0
-        for observation, action, prob, reward, done in reversed(frames):
-            if done:
-                discounted_reward = 0.0
-            discounted_reward = Settings.gamma * discounted_reward + reward
-            rewards.append(discounted_reward)
-        rewards = list(reversed(rewards))
 
         observations = torch.cat(observations, axis=0).to(self.device)
         actions = torch.LongTensor(actions).to(self.device)
@@ -115,7 +146,8 @@ class PPO(BasicAlgorithm):
         pi = torch.softmax(scores/Settings.temp, axis=1)
 
         rate = pi[range(N), actions] / pi_old[range(N), actions]
-        clipped_rate = torch.clip(rate, 1.0 - Settings.epsilon, 1.0 + Settings.epsilon)
+        clipped_rate = torch.clip(
+            rate, 1.0 - Settings.epsilon, 1.0 + Settings.epsilon)
 
         adv = rewards - V.detach()
 
@@ -147,6 +179,9 @@ class PPO(BasicAlgorithm):
         self.step += 1
 
         return self.last_episode_rewards, loss_clip, loss_kl, loss_v, loss
+
+    def write_video(self, episode=None, filename=None):
+        self.actors[0].write_video(episode, filename)
 
 
 class TestPPO(unittest.TestCase):
@@ -181,7 +216,7 @@ class TestPPO(unittest.TestCase):
     def test_mars_rover(self):
         Settings.lr = 0.1
 
-        env = MarsRoverEnv()
+        def env(): return MarsRoverEnv()
 
         class Net(nn.Module):
             def __init__(self):
@@ -220,14 +255,14 @@ class TestPPO(unittest.TestCase):
         Settings.lr = 0.01
         Settings.c_v = 0.001
 
-        env = gym.make("CartPole-v1")
+        env = lambda: gym.make("CartPole-v1")
 
         class Net(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.linear1 = nn.Linear(4, 64)
                 self.linear2 = nn.Linear(64, 64)
-                self.linear3 = nn.Linear(64, env.action_space.n)
+                self.linear3 = nn.Linear(64, env().action_space.n)
                 self.linear4 = nn.Linear(64, 1)
 
             def forward(self, x):
@@ -242,7 +277,8 @@ class TestPPO(unittest.TestCase):
         n = 100
         for i in range(n):
             magic = (i == n - 1)
-            reward, loss_clip, loss_kl, loss_v, loss = trainer.train(render=magic)
+            reward, loss_clip, loss_kl, loss_v, loss = trainer.train(
+                render=magic)
 
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,

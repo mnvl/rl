@@ -3,10 +3,10 @@ import numpy as np
 import skvideo.io
 from torch.utils.tensorboard import SummaryWriter
 
-class BasicAlgorithm:
+
+class BasicActor:
     def __init__(self):
         self.rendered_frames = []
-        self.writer = SummaryWriter()
 
     def render_frame(self):
         image = self.env.render(mode="rgb_array")
@@ -26,6 +26,11 @@ class BasicAlgorithm:
         print("wrote %s from %s" % (filename, str(images.shape)))
 
         self.rendered_frames = []
+
+
+class BasicAlgorithm:
+    def __init__(self):
+        self.writer = SummaryWriter()
 
 
 class MarsRoverEnv:
