@@ -38,7 +38,7 @@ class PPO(BasicAlgorithm):
         self.prepare = prepare
 
         self.optimizer = optim.Adam(
-            self.net.parameters(), lr=Settings.lr, weight_decay=0.0)
+            self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
 
         self.frames_seen = 0
         self.episodes_seen = 0
@@ -119,14 +119,14 @@ class PPO(BasicAlgorithm):
 
         adv = rewards - V.detach()
 
-        loss_clip = -torch.mean(torch.min(rate * adv, clipped_rate * adv))
+        loss_clip = torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
         loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
 
         loss_v = torch.mean(torch.square(rewards - V))
 
-        loss = loss_clip + Settings.beta * loss_kl + Settings.c_v * loss_v
+        loss = loss_clip - Settings.beta * loss_kl - Settings.c_v * loss_v
 
         loss.backward()
         self.optimizer.step()
