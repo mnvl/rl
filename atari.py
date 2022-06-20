@@ -84,12 +84,12 @@ def main():
 
     if args.load_step > 0:
         print("loading weights")
-        net.load_state_dict(torch.load("step_%06d" % args.first_episode))
+        net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
         ppo.Settings.lr = args.lr
         ppo.Settings.c_value = 0.01
-        trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn)
+        trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr
         trainer = dql.DQL(env, net, device="cuda", prepare=pre)
@@ -97,7 +97,7 @@ def main():
         print("unkonwn algorithm", args.algo)
         sys.exit(1)
 
-    pb = tqdm(range(args.num_steps))
+    pb = tqdm(range(args.load_step, args.num_steps))
 
     for i in pb:
         magic = (i % 100 == 0)

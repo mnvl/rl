@@ -88,7 +88,7 @@ class Actor(BasicActor):
 
 
 class PPO(BasicAlgorithm):
-    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda x: x):
+    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda x: x, first_step=0):
         BasicAlgorithm.__init__(self)
 
         self.device = torch.device(device)
@@ -102,7 +102,7 @@ class PPO(BasicAlgorithm):
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
 
         self.frames_seen = 0
-        self.step = 0
+        self.step = first_step
         self.last_episode_rewards = 0
 
     def sample_frames(self, render):
