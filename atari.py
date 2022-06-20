@@ -88,6 +88,7 @@ def main():
 
     if args.algo == "ppo":
         ppo.Settings.lr = args.lr
+        ppo.Settings.c_value = 0.01
         trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr

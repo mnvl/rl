@@ -170,14 +170,13 @@ class PPO(BasicAlgorithm):
         self.optimizer.step()
 
         self.writer.add_histogram("pi", pi.reshape(-1))
-        self.writer.add_histogram("rate", rate.reshape(-1))
-        self.writer.add_histogram("adv", rate.reshape(-1))
+        self.writer.add_histogram("adv", adv.reshape(-1))
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/kl", loss_kl, self.step)
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
-        self.writer.add_scalar("loss", loss_value, self.step)
+        self.writer.add_scalar("loss", loss, self.step)
         self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         return self.last_episode_rewards, float(loss)
