@@ -1,4 +1,5 @@
 
+import time
 import os
 import unittest
 
@@ -16,11 +17,10 @@ from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 class Settings:
     lr = 0.001
-    temp = 1.0
     gamma = 0.99
 
-    sample_frames = 256
-    num_actors = 8
+    sample_frames = 128
+    num_actors = 32
 
     epsilon = 0.2
     beta = 0.0
@@ -28,63 +28,71 @@ class Settings:
     c_entropy = 0.01
 
 
-class Actor(BasicActor):
+class Actors:
     def __init__(self, env_fn, prepare_fn, device, net):
         BasicActor.__init__(self)
 
-        self.env = env_fn()
+        self.envs = [env_fn() for j in range(Settings.num_actors)]
         self.prepare_fn = prepare_fn
         self.device = device
         self.net = net
 
-        self.done = True
+        self.observations = [None for j in range(Settings.num_actors)]
+        self.done = [True for j in range(Settings.num_actors)]
 
+        self.frames_seen = 0.0
         self.episodes_seen = 0
-        self.last_episode_rewards = 0
-        self.episode_rewards = 0
+        self.last_episode_rewards = [0.0 for j in range(Settings.num_actors)]
+        self.episode_rewards = [0.0 for j in range(Settings.num_actors)]
 
-    def select_action(self):
-        s = np.expand_dims(self.observation, 0)
+    def select_actions(self):
+        s = [np.expand_dims(observation, 0) for observation in self.observations]
+        s = np.concatenate(s, axis=0)
         with torch.no_grad():
             scores, V = self.net(torch.tensor(s, device=self.device))
-        probs = torch.softmax(scores[0] / Settings.temp, axis=0)
+        probs = torch.softmax(scores, axis=1)
         distr = D.Categorical(probs=probs)
-        action = distr.sample()
-        return action.cpu(), probs.cpu()
+        actions = distr.sample()
+        return actions.cpu(), probs.cpu()
 
     def sample_frames(self, render=False):
-        frames = []
+        frames = [[]for j in range(Settings.num_actors)]
 
         for i in range(Settings.sample_frames):
-            if self.done:
-                self.observation = self.prepare_fn(self.env.reset())
-                self.done = False
-                self.episodes_seen += 1
+            for j in range(Settings.num_actors):
+                if self.done[j]:
+                    self.observations[j] = self.prepare_fn(self.envs[j].reset())
+                    self.done[j] = False
+                    self.episodes_seen += 1
 
-            action, prob = self.select_action()
-            new_observation, reward, self.done, _ = self.env.step(int(action))
+                    self.last_episode_rewards[j] = self.episode_rewards[j]
+                    self.episode_rewards[j] = 0.0
 
-            frames.append((self.observation, action, prob, reward, self.done))
-            self.observation = self.prepare_fn(new_observation)
+                    self.episodes_seen += 1
 
-            self.episode_rewards += reward
-            if self.done:
-                self.last_episode_rewards = self.episode_rewards
-                self.episode_rewards = 0
+            actions, probs = self.select_actions()
 
-            if render:
-                self.render_frame()
+            for j in range(Settings.num_actors):
+                new_observation, reward, self.done[j], _ = self.envs[j].step(int(actions[j]))
+                self.frames_seen += 1
 
-        discounted_reward = 0.0
-        for i in range(Settings.sample_frames-1, -1, -1):
-            observation, action, prob, reward, done = frames[i]
-            if done:
-                discounted_reward = 0.0
-            discounted_reward = Settings.gamma * discounted_reward + reward
-            reward = discounted_reward
-            frames[i] = (observation, action, prob, reward, done)
+                frames[j].append((self.observations[j], actions[j], probs[j], reward, self.done[j]))
+                self.observations[j] = self.prepare_fn(new_observation)
 
-        return frames
+                self.episode_rewards[j] += reward
+
+        sampled_frames = []
+
+        for j in range(Settings.num_actors):
+            discounted_reward = 0.0
+            for i in range(Settings.sample_frames-1, -1, -1):
+                observation, action, prob, reward, done = frames[j][i]
+                if done:
+                    discounted_reward = 0.0
+                discounted_reward = Settings.gamma * discounted_reward + reward
+                sampled_frames.append((observation, action, prob, discounted_reward, done))
+
+        return sampled_frames
 
 
 class PPO(BasicAlgorithm):
@@ -95,31 +103,12 @@ class PPO(BasicAlgorithm):
         self.net = net.to(self.device)
         self.prepare_fn = prepare_fn
 
-        self.actors = [Actor(env_fn, prepare_fn, self.device, self.net)
-                       for i in range(Settings.num_actors)]
+        self.actors = Actors(env_fn, prepare_fn, self.device, self.net)
 
         self.optimizer = optim.Adam(
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
 
-        self.frames_seen = 0
         self.step = first_step
-        self.last_episode_rewards = 0
-
-    def sample_frames(self, render):
-        self.last_episode_rewards = 0
-        self.episodes_seen = 0
-
-        frames = []
-        for i, actor in enumerate(self.actors):
-            frames.extend(actor.sample_frames(render and i == 0))
-
-            self.last_episode_rewards += actor.last_episode_rewards
-            self.episodes_seen += actor.episodes_seen
-
-        self.last_episode_rewards /= len(self.actors)
-        self.frames_seen += len(frames)
-
-        return frames
 
     def optimize(self, frames):
         observations = []
@@ -144,7 +133,7 @@ class PPO(BasicAlgorithm):
 
         scores, V = self.net(observations)
 
-        pi = torch.softmax(scores/Settings.temp, axis=1)
+        pi = torch.softmax(scores, axis=1)
 
         rate = pi[range(N), actions] / pi_old[range(N), actions]
         clipped_rate = torch.clip(
@@ -154,7 +143,7 @@ class PPO(BasicAlgorithm):
 
         loss_clip = torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
-        log_pi = torch.log_softmax(scores/Settings.temp, axis=1)
+        log_pi = torch.log_softmax(scores, axis=1)
         loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
 
         loss_value = torch.mean(torch.square(rewards - V))
@@ -182,28 +171,38 @@ class PPO(BasicAlgorithm):
         return self.last_episode_rewards, float(loss)
 
     def train(self, render=False):
-        frames = self.sample_frames(render)
+        t1 = time.time()
+        frames = self.actors.sample_frames(render)
+        self.frames_seen = self.actors.frames_seen
+        self.episodes_seen = self.actors.episodes_seen
+        self.last_episode_rewards = np.mean(self.actors.last_episode_rewards)
 
+        t2 = time.time()
         rewards, loss = self.optimize(frames)
+
+        t3 = time.time()
+
+        if self.step % 10 == 0:
+            print("t_sample = %.3f, t_optimize = %.3f" % (t2 - t1, t3 - t2))
+
         self.step += 1
 
         return rewards, loss
 
     def write_video(self, episode=None, filename=None):
-        self.actors[0].write_video(episode, filename)
+        #self.actors.write_video(episode, filename)
+        pass
 
 
 class TestPPO(unittest.TestCase):
     def setUp(self):
         self.save = (
             Settings.lr,
-            Settings.temp,
             Settings.gamma,
             Settings.sample_frames)
 
     def tearDown(self):
         (Settings.lr,
-         Settings.temp,
          Settings.gamma,
          Settings.sample_frames) = self.save
 
