@@ -6,6 +6,7 @@ import multiprocessing as mp
 
 import gym
 import numpy as np
+import skvideo.io
 
 import torch
 import torch.nn as nn
@@ -31,9 +32,10 @@ class Settings:
 
 
 class Worker:
-    def __init__(self, env_fn, prepare_fn):
+    def __init__(self, index, env_fn, prepare_fn):
         self.parent_conn, self.child_conn = mp.Pipe()
-        self.process = mp.Process(target=self.run, args=(self.child_conn, env_fn, prepare_fn))
+        self.process = mp.Process(target=self.run, args=(
+            index, self.child_conn, env_fn, prepare_fn))
         self.process.start()
 
     def read_status(self):
@@ -47,7 +49,7 @@ class Worker:
         self.send_action(-1)
         self.process.join()
 
-    def run(self, child_conn, env_fn, prepare_fn):
+    def run(self, index, child_conn, env_fn, prepare_fn):
         env = env_fn()
         prepare = prepare_fn()
 
@@ -56,24 +58,42 @@ class Worker:
         done = False
         child_conn.send((observation, reward, done))
 
+        episode = 0
+        frames = []
+
         while True:
             action = child_conn.recv()
-            if action == -1: return
+            if action == -1:
+                return
 
             observation, reward, done, _ = env.step(action)
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
 
+            if index == 0 and episode % 100 == 0:
+                image = env.render(mode="rgb_array")
+                image = np.expand_dims(image, axis=0)
+                frames.append(image)
+
+                if done:
+                    frames = np.concatenate(frames, axis=0)
+                    frames = (frames * 255).astype(np.uint8)
+                    skvideo.io.vwrite("episode_%06d.avi" % episode, frames)
+                    frames = []
+
             if done:
                 observation = prepare(env.reset())
                 reward = 0.0
                 done = False
+                episode += 1
+
 
 class Actors:
     def __init__(self, env_fn, prepare_fn, device, net):
         BasicActor.__init__(self)
 
-        self.workers = [Worker(env_fn, prepare_fn) for j in range(Settings.num_actors)]
+        self.workers = [Worker(j, env_fn, prepare_fn)
+                        for j in range(Settings.num_actors)]
         self.device = device
         self.net = net
 
@@ -90,7 +110,8 @@ class Actors:
         self.frames = [[]for j in range(Settings.num_actors)]
 
     def select_actions(self):
-        s = [np.expand_dims(observation, 0) for observation in self.observations]
+        s = [np.expand_dims(observation, 0)
+             for observation in self.observations]
         s = np.concatenate(s, axis=0)
         with torch.no_grad():
             scores, V = self.net(torch.tensor(s, device=self.device))
@@ -110,7 +131,8 @@ class Actors:
                 new_observation, reward, done = self.workers[j].read_status()
                 self.frames_seen += 1
 
-                self.frames[j].append((self.observations[j], actions[j], probs[j], reward, done))
+                self.frames[j].append(
+                    (self.observations[j], actions[j], probs[j], reward, done))
                 self.observations[j] = new_observation
 
                 self.episode_rewards[j] += reward
@@ -131,12 +153,12 @@ class Actors:
                 discounted_reward = Settings.gamma * discounted_reward + reward
 
                 if i < Settings.sample_frames:
-                    frames.append((observation, action, prob, discounted_reward, done))
+                    frames.append((observation, action, prob,
+                                  discounted_reward, done))
 
             self.frames[j] = self.frames[j][Settings.sample_frames:]
 
         return frames
-
 
     def stop(self):
         for w in self.workers:
