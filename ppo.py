@@ -231,9 +231,9 @@ class PPO(BasicAlgorithm):
         loss.backward()
         self.optimizer.step()
 
-        self.writer.add_histogram("pi", pi.reshape(-1))
-        self.writer.add_histogram("adv", adv.reshape(-1))
-        self.writer.add_histogram("rate", rate.reshape(-1))
+        self.writer.add_histogram("pi", pi.reshape(-1), self.step)
+        self.writer.add_histogram("adv", adv.reshape(-1), self.step)
+        self.writer.add_histogram("rate", rate.reshape(-1), self.step)
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/kl", loss_kl, self.step)
