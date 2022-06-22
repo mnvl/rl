@@ -91,7 +91,7 @@ def main():
         ppo.Settings.c_value = 0.01
         ppo.Settings.horizon = 128
         ppo.Settings.sample_frames = 32
-        ppo.Settings.num_actors = 8
+        ppo.Settings.num_actors = 100
         trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr
