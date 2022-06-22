@@ -80,7 +80,7 @@ class AtariPre:
 def main():
     env_fn = lambda: gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
-    pre_fn = AtariPre()
+    pre_fn = AtariPre
 
     if args.load_step > 0:
         print("loading weights")
@@ -89,6 +89,9 @@ def main():
     if args.algo == "ppo":
         ppo.Settings.lr = args.lr
         ppo.Settings.c_value = 0.01
+        ppo.Settings.horizon = 128
+        ppo.Settings.sample_frames = 32
+        ppo.Settings.num_actors = 8
         trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr

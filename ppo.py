@@ -2,6 +2,7 @@
 import time
 import os
 import unittest
+import multiprocessing as mp
 
 import gym
 import numpy as np
@@ -19,8 +20,9 @@ class Settings:
     lr = 0.001
     gamma = 0.99
 
+    horizon = 256
     sample_frames = 128
-    num_actors = 32
+    num_actors = 8
 
     epsilon = 0.2
     beta = 0.0
@@ -28,22 +30,64 @@ class Settings:
     c_entropy = 0.01
 
 
+class Worker:
+    def __init__(self, env_fn, prepare_fn):
+        self.parent_conn, self.child_conn = mp.Pipe()
+        self.process = mp.Process(target=self.run, args=(self.child_conn, env_fn, prepare_fn))
+        self.process.start()
+
+    def read_status(self):
+        status = self.parent_conn.recv()
+        return status
+
+    def send_action(self, action):
+        self.parent_conn.send(int(action))
+
+    def stop(self):
+        self.send_action(-1)
+        self.process.join()
+
+    def run(self, child_conn, env_fn, prepare_fn):
+        env = env_fn()
+        prepare = prepare_fn()
+
+        observation = prepare(env.reset())
+        reward = 0.0
+        done = False
+        child_conn.send((observation, reward, done))
+
+        while True:
+            action = child_conn.recv()
+            if action == -1: return
+
+            observation, reward, done, _ = env.step(action)
+            observation = prepare(observation)
+            child_conn.send((observation, reward, done))
+
+            if done:
+                observation = prepare(env.reset())
+                reward = 0.0
+                done = False
+
 class Actors:
     def __init__(self, env_fn, prepare_fn, device, net):
         BasicActor.__init__(self)
 
-        self.envs = [env_fn() for j in range(Settings.num_actors)]
-        self.prepare_fn = prepare_fn
+        self.workers = [Worker(env_fn, prepare_fn) for j in range(Settings.num_actors)]
         self.device = device
         self.net = net
 
-        self.observations = [None for j in range(Settings.num_actors)]
-        self.done = [True for j in range(Settings.num_actors)]
+        self.observations = []
+        for j in range(Settings.num_actors):
+            observation, reward, done = self.workers[j].read_status()
+            self.observations.append(observation)
 
         self.frames_seen = 0.0
         self.episodes_seen = 0
         self.last_episode_rewards = [0.0 for j in range(Settings.num_actors)]
         self.episode_rewards = [0.0 for j in range(Settings.num_actors)]
+
+        self.frames = [[]for j in range(Settings.num_actors)]
 
     def select_actions(self):
         s = [np.expand_dims(observation, 0) for observation in self.observations]
@@ -56,52 +100,55 @@ class Actors:
         return actions.cpu(), probs.cpu()
 
     def sample_frames(self, render=False):
-        frames = [[]for j in range(Settings.num_actors)]
-
-        for i in range(Settings.sample_frames):
-            for j in range(Settings.num_actors):
-                if self.done[j]:
-                    self.observations[j] = self.prepare_fn(self.envs[j].reset())
-                    self.done[j] = False
-                    self.episodes_seen += 1
-
-                    self.last_episode_rewards[j] = self.episode_rewards[j]
-                    self.episode_rewards[j] = 0.0
-
-                    self.episodes_seen += 1
-
+        while len(self.frames[0]) < Settings.horizon:
             actions, probs = self.select_actions()
 
             for j in range(Settings.num_actors):
-                new_observation, reward, self.done[j], _ = self.envs[j].step(int(actions[j]))
+                self.workers[j].send_action(actions[j])
+
+            for j in range(Settings.num_actors):
+                new_observation, reward, done = self.workers[j].read_status()
                 self.frames_seen += 1
 
-                frames[j].append((self.observations[j], actions[j], probs[j], reward, self.done[j]))
-                self.observations[j] = self.prepare_fn(new_observation)
+                self.frames[j].append((self.observations[j], actions[j], probs[j], reward, done))
+                self.observations[j] = new_observation
 
                 self.episode_rewards[j] += reward
 
-        sampled_frames = []
+                if done:
+                    self.last_episode_rewards[j] = self.episode_rewards[j]
+                    self.episode_rewards[j] = 0
+                    self.episodes_seen += 1
+
+        frames = []
 
         for j in range(Settings.num_actors):
             discounted_reward = 0.0
-            for i in range(Settings.sample_frames-1, -1, -1):
-                observation, action, prob, reward, done = frames[j][i]
+            for i in range(Settings.horizon-1, -1, -1):
+                observation, action, prob, reward, done = self.frames[j][i]
                 if done:
                     discounted_reward = 0.0
                 discounted_reward = Settings.gamma * discounted_reward + reward
-                sampled_frames.append((observation, action, prob, discounted_reward, done))
 
-        return sampled_frames
+                if i < Settings.sample_frames:
+                    frames.append((observation, action, prob, discounted_reward, done))
+
+            self.frames[j] = self.frames[j][Settings.sample_frames:]
+
+        return frames
+
+
+    def stop(self):
+        for w in self.workers:
+            w.stop()
 
 
 class PPO(BasicAlgorithm):
-    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda x: x, first_step=0):
+    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda: lambda x: x, first_step=0):
         BasicAlgorithm.__init__(self)
 
         self.device = torch.device(device)
         self.net = net.to(self.device)
-        self.prepare_fn = prepare_fn
 
         self.actors = Actors(env_fn, prepare_fn, self.device, self.net)
 
@@ -166,7 +213,6 @@ class PPO(BasicAlgorithm):
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss, self.step)
-        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         return self.last_episode_rewards, float(loss)
 
@@ -176,18 +222,26 @@ class PPO(BasicAlgorithm):
         self.frames_seen = self.actors.frames_seen
         self.episodes_seen = self.actors.episodes_seen
         self.last_episode_rewards = np.mean(self.actors.last_episode_rewards)
+        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         t2 = time.time()
         rewards, loss = self.optimize(frames)
 
         t3 = time.time()
 
-        if self.step % 10 == 0:
-            print("t_sample = %.3f, t_optimize = %.3f" % (t2 - t1, t3 - t2))
+        t_sample = t2 - t1
+        t_optimize = t3 - t2
+
+        self.writer.add_scalar("t_sample", t_sample, self.step)
+        self.writer.add_scalar("t_optimize", t_optimize, self.step)
+        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         self.step += 1
 
         return rewards, loss
+
+    def stop(self):
+        self.actors.stop()
 
     def write_video(self, episode=None, filename=None):
         #self.actors.write_video(episode, filename)
@@ -245,7 +299,9 @@ class TestPPO(unittest.TestCase):
                 print("mars rover", trainer.frames_seen,
                       trainer.episodes_seen, rewards, loss)
 
-        assert rewards == 10.0, str(reward)
+        trainer.stop()
+
+        self.assertEqual(rewards, 10.0)
 
         X = torch.eye(5).type(torch.float32)
         pi, V = net(X)
@@ -291,6 +347,8 @@ class TestPPO(unittest.TestCase):
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
                       trainer.episodes_seen, rewards, loss)
+
+        trainer.stop()
 
         trainer.write_video(filename="test_cartpole.mp4")
 
