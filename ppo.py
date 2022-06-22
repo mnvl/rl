@@ -30,6 +30,10 @@ class Settings:
     c_value = 0.1
     c_entropy = 0.01
 
+    alpha_0 = 1.0
+    alpha_1 = 0.0
+    alpha_steps = 100000
+
 
 class Worker:
     def __init__(self, index, env_fn, prepare_fn):
@@ -206,7 +210,7 @@ class PPO(BasicAlgorithm):
 
         rate = pi[range(N), actions] / pi_old[range(N), actions]
         clipped_rate = torch.clip(
-            rate, 1.0 - Settings.epsilon, 1.0 + Settings.epsilon)
+            rate, 1.0 - Settings.epsilon * self.alpha, 1.0 + Settings.epsilon * self.alpha)
 
         adv = rewards - V.detach()
 
@@ -229,6 +233,7 @@ class PPO(BasicAlgorithm):
 
         self.writer.add_histogram("pi", pi.reshape(-1))
         self.writer.add_histogram("adv", adv.reshape(-1))
+        self.writer.add_histogram("rate", rate.reshape(-1))
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/kl", loss_kl, self.step)
@@ -239,6 +244,12 @@ class PPO(BasicAlgorithm):
         return self.last_episode_rewards, float(loss)
 
     def train(self, render=False):
+        self.alpha = Settings.alpha_0 + \
+            (Settings.alpha_1 - Settings.alpha_0) * \
+            self.step / Settings.alpha_steps
+        for g in self.optimizer.param_groups:
+            g['lr'] = Settings.lr * self.alpha
+
         t1 = time.time()
         frames = self.actors.sample_frames(render)
         self.frames_seen = self.actors.frames_seen
