@@ -76,7 +76,7 @@ class Worker:
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
 
-            if index == 0 and episode % 100 == 0 and not Settings.write_videos:
+            if index == 0 and episode % 100 == 0 and Settings.write_videos:
                 image = env.render(mode="rgb_array")
                 image = np.expand_dims(image, axis=0)
                 frames.append(image)

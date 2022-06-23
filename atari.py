@@ -88,7 +88,7 @@ def ppo_objective(trial):
     pre_fn = AtariPre
     trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
 
-    all_rewards = []
+    last_rewards = []
 
     for i in range(args.num_steps):
         rewards, loss = trainer.train()
@@ -96,7 +96,8 @@ def ppo_objective(trial):
         if i % 100 == 0:
             print(ppo.Settings.lr, ppo.Settings.c_value, ppo.Settings.c_entropy, i, rewards, loss)
 
-        all_rewards.append(rewards)
+        if i > args.num_steps - 100:
+            last_rewards.append(rewards)
 
         if trial.should_prune():
             trainer.stop()
@@ -104,7 +105,7 @@ def ppo_objective(trial):
 
     trainer.stop()
 
-    return float(np.mean(rewards))
+    return float(np.mean(last_rewards))
 
 
 def main():
