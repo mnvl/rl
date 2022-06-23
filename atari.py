@@ -20,8 +20,7 @@ import ppo
 parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
 parser.add_argument('--algo', type=str, default="ppo")
-parser.add_argument('--lr', type=float, default="0.00025")
-parser.add_argument('--tune', type=bool, default=False)
+parser.add_argument('--lr', type=float, default="0.03")
 parser.add_argument('--load_step', type=int, default=0)
 parser.add_argument('--num_steps', type=int, default=100000)
 
@@ -79,44 +78,61 @@ class AtariPre:
 
 
 def ppo_objective(trial):
-    ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
-    ppo.Settings.c_value = trial.suggest_float("c_value", 0.001, 1.0, log=True)
-    ppo.Settings.c_entropy = trial.suggest_float("c_entropy", 0.001, 1.0, log=True)
+    if False:
+        ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
+        ppo.Settings.c_value = trial.suggest_float(
+            "c_value", 0.001, 1.0, log=True)
+        ppo.Settings.c_entropy = trial.suggest_float(
+            "c_entropy", 0.001, 1.0, log=True)
+    else:
+        ppo.Settings.lr = trial.suggest_float("lr", 0.01, 0.05)
+        ppo.Settings.c_value = trial.suggest_float("c_value", 0.1, 0.5)
+        ppo.Settings.c_entropy = trial.suggest_float("c_entropy", 0.01, 0.05)
 
-    env_fn = lambda: gym.make(args.env, full_action_space=False)
+    def env_fn(): return gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
     pre_fn = AtariPre
-    trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
+    trainer = ppo.PPO(env_fn, net, device="cuda",
+                      prepare_fn=pre_fn, first_step=args.load_step)
 
     last_rewards = []
 
     for i in range(args.num_steps):
         rewards, loss = trainer.train()
+        last_rewards.append(rewards)
 
         if i % 100 == 0:
-            print(ppo.Settings.lr, ppo.Settings.c_value, ppo.Settings.c_entropy, i, rewards, loss)
-
-        if i > args.num_steps - 100:
+            print(ppo.Settings.lr, ppo.Settings.c_value,
+                  ppo.Settings.c_entropy, i, np.mean(last_rewards), loss)
             last_rewards.append(rewards)
 
-        if trial.should_prune():
-            trainer.stop()
-            raise optuna.TrialPruned()
+            trial.report(float(np.mean(last_rewards)), i)
+
+            if trial.should_prune():
+                trainer.stop()
+                raise optuna.TrialPruned()
+
+            last_rewards = []
 
     trainer.stop()
 
     return float(np.mean(last_rewards))
 
 
-def main():
-    if args.tune:
-        study = optuna.create_study(
-            direction="maximize",
-            pruner=optuna.pruners.HyperbandPruner())
-        study.optimize(ppo_objective, n_trials=100)
-        print(study.best_trial)
+def tune():
+    study = optuna.create_study(
+        direction="maximize",
+        pruner=optuna.pruners.HyperbandPruner())
+    study.optimize(ppo_objective, n_trials=100)
+    print(study.best_trial)
 
-    env_fn = lambda: gym.make(args.env, full_action_space=False)
+
+def main():
+    if True:
+        tune()
+        return
+
+    def env_fn(): return gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
     pre_fn = AtariPre
 
@@ -129,7 +145,10 @@ def main():
         ppo.Settings.horizon = 128
         ppo.Settings.sample_frames = 32
         ppo.Settings.num_actors = 100
-        trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
+        ppo.Settings.c_value = 0.35
+        ppo.Settings.c_entropy = 0.025
+        trainer = ppo.PPO(env_fn, net, device="cuda",
+                          prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
         dql.Settings.lr = args.lr
         trainer = dql.DQL(env, net, device="cuda", prepare=pre)
@@ -147,7 +166,7 @@ def main():
         pb.set_description("%8d %6.6f %6.6f" % (i, rewards, loss))
 
         if magic:
-            trainer.write_video(filename = "step_%06d.avi" % i)
+            trainer.write_video(filename="step_%06d.avi" % i)
             torch.save(net.state_dict(), "step_%06d" % i)
 
 
