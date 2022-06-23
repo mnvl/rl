@@ -10,6 +10,8 @@ import torch.nn.functional as F
 
 import gym
 
+import optuna
+
 from tqdm import tqdm
 
 import dql
@@ -19,6 +21,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
 parser.add_argument('--algo', type=str, default="ppo")
 parser.add_argument('--lr', type=float, default="0.00025")
+parser.add_argument('--tune', type=bool, default=False)
 parser.add_argument('--load_step', type=int, default=0)
 parser.add_argument('--num_steps', type=int, default=100000)
 
@@ -33,9 +36,7 @@ class AtariNet(nn.Module):
         self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
         self.linear1 = nn.Linear(3072, 512)
         self.fc1 = nn.Linear(512, env.action_space.n)
-
-        if args.algo == "ppo":
-            self.fc2 = nn.Linear(512, 1)
+        self.fc2 = nn.Linear(512, 1)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -77,7 +78,43 @@ class AtariPre:
         return np.concatenate(self.lookback, axis=0).copy()
 
 
+def ppo_objective(trial):
+    ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
+    ppo.Settings.c_value = trial.suggest_float("c_value", 0.001, 1.0, log=True)
+    ppo.Settings.c_entropy = trial.suggest_float("c_entropy", 0.001, 1.0, log=True)
+
+    env_fn = lambda: gym.make(args.env, full_action_space=False)
+    net = AtariNet(env_fn())
+    pre_fn = AtariPre
+    trainer = ppo.PPO(env_fn, net, device="cuda", prepare_fn=pre_fn, first_step=args.load_step)
+
+    all_rewards = []
+
+    for i in range(args.num_steps):
+        rewards, loss = trainer.train()
+
+        if i % 100 == 0:
+            print(ppo.Settings.lr, ppo.Settings.c_value, ppo.Settings.c_entropy, i, rewards, loss)
+
+        all_rewards.append(rewards)
+
+        if trial.should_prune():
+            trainer.stop()
+            raise optuna.TrialPruned()
+
+    trainer.stop()
+
+    return float(np.mean(rewards))
+
+
 def main():
+    if args.tune:
+        study = optuna.create_study(
+            direction="maximize",
+            pruner=optuna.pruners.HyperbandPruner())
+        study.optimize(ppo_objective, n_trials=100)
+        print(study.best_trial)
+
     env_fn = lambda: gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
     pre_fn = AtariPre
@@ -88,7 +125,6 @@ def main():
 
     if args.algo == "ppo":
         ppo.Settings.lr = args.lr
-        ppo.Settings.c_value = 0.01
         ppo.Settings.horizon = 128
         ppo.Settings.sample_frames = 32
         ppo.Settings.num_actors = 100
@@ -103,7 +139,7 @@ def main():
     pb = tqdm(range(args.load_step, args.num_steps))
 
     for i in pb:
-        magic = (i % 100 == 0)
+        magic = (i % 1000 == 0)
 
         rewards, loss = trainer.train(render=magic)
 

@@ -34,6 +34,8 @@ class Settings:
     alpha_1 = 0.0
     alpha_steps = 100000
 
+    write_videos = False
+
 
 class Worker:
     def __init__(self, index, env_fn, prepare_fn):
@@ -74,7 +76,7 @@ class Worker:
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
 
-            if index == 0 and episode % 100 == 0:
+            if index == 0 and episode % 100 == 0 and not Settings.write_videos:
                 image = env.render(mode="rgb_array")
                 image = np.expand_dims(image, axis=0)
                 frames.append(image)
