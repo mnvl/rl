@@ -1,4 +1,5 @@
 
+import copy
 import time
 import os
 import unittest
@@ -26,8 +27,7 @@ class Settings:
     num_actors = 8
 
     epsilon = 0.2
-    beta = 0.0
-    c_value = 0.1
+    c_value = 0.0
     c_entropy = 0.01
 
     alpha_0 = 1.0
@@ -35,6 +35,7 @@ class Settings:
     alpha_steps = 100000
 
     write_videos = False
+    split_pi_and_v_nets = True
 
 
 class Worker:
@@ -183,6 +184,12 @@ class PPO(BasicAlgorithm):
         self.optimizer = optim.Adam(
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
 
+        if Settings.split_pi_and_v_nets:
+            self.net_v = copy.deepcopy(net).to(self.device)
+            self.optimizer_v = optim.Adam(
+                self.net_v.parameters(), lr=Settings.lr, weight_decay=0.0)
+            assert Settings.c_value == 0.0
+
         self.step = first_step
 
     def optimize(self, frames):
@@ -204,9 +211,21 @@ class PPO(BasicAlgorithm):
 
         N = observations.shape[0]
 
+        if Settings.split_pi_and_v_nets:
+            self.optimizer_v.zero_grad()
+            _, V = self.net_v(observations)
+            loss_value = torch.mean(torch.square(rewards - V))
+            loss_value.backward()
+            self.optimizer_v.step()
+
         self.optimizer.zero_grad()
 
-        scores, V = self.net(observations)
+        if Settings.split_pi_and_v_nets:
+            scores, _ = self.net(observations)
+            loss_value = float(loss_value)
+        else:
+            scores, V = self.net(observations)
+            loss_value = torch.mean(torch.square(rewards - V))
 
         pi = torch.softmax(scores, axis=1)
 
@@ -219,14 +238,10 @@ class PPO(BasicAlgorithm):
         loss_clip = torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores, axis=1)
-        loss_kl = torch.mean(F.kl_div(pi_old, log_pi, log_target=True))
-
-        loss_value = torch.mean(torch.square(rewards - V))
 
         loss_entropy = -torch.mean(pi * log_pi)
 
         loss = loss_clip - \
-            Settings.beta * loss_kl - \
             Settings.c_value * loss_value + \
             Settings.c_entropy * loss_entropy
 
@@ -238,7 +253,6 @@ class PPO(BasicAlgorithm):
         self.writer.add_histogram("rate", rate.reshape(-1), self.step)
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
-        self.writer.add_scalar("loss/kl", loss_kl, self.step)
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss, self.step)
@@ -352,7 +366,6 @@ class TestPPO(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         Settings.lr = 0.01
-        Settings.c_value = 0.001
 
         def env(): return gym.make("CartPole-v1")
 
