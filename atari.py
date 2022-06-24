@@ -20,7 +20,7 @@ import ppo
 parser = argparse.ArgumentParser()
 parser.add_argument('--env', type=str, default="ALE/Breakout-v5")
 parser.add_argument('--algo', type=str, default="ppo")
-parser.add_argument('--lr', type=float, default="0.03")
+parser.add_argument('--lr', type=float, default="0.001")
 parser.add_argument('--load_step', type=int, default=0)
 parser.add_argument('--num_steps', type=int, default=100000)
 
@@ -128,7 +128,7 @@ def tune():
 
 
 def main():
-    if True:
+    if False:
         tune()
         return
 

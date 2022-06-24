@@ -34,7 +34,7 @@ class Settings:
     alpha_1 = 0.0
     alpha_steps = 100000
 
-    write_videos = False
+    write_videos = True
     split_pi_and_v_nets = True
 
 
