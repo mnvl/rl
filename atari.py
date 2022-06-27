@@ -88,6 +88,7 @@ def ppo_objective(trial):
     if ppo.Settings.split_pi_and_v_nets:
         ppo.Settings.c_value = 0.0
     ppo.Settings.write_videos = False
+    ppo.Settings.num_actors = 100
 
     def env_fn(): return gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
@@ -124,7 +125,8 @@ def tune():
         study_name="atari",
         direction="maximize",
         pruner=optuna.pruners.HyperbandPruner(),
-        storage="sqlite:///optuna.sqlite3")
+        storage="sqlite:///optuna.sqlite3",
+        load_if_exists=True)
     study.optimize(ppo_objective, n_trials=100)
     print(study.best_trial)
 
