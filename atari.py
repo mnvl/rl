@@ -78,16 +78,16 @@ class AtariPre:
 
 
 def ppo_objective(trial):
-    if False:
-        ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
-        ppo.Settings.c_value = trial.suggest_float(
-            "c_value", 0.001, 1.0, log=True)
-        ppo.Settings.c_entropy = trial.suggest_float(
-            "c_entropy", 0.001, 1.0, log=True)
-    else:
-        ppo.Settings.lr = trial.suggest_float("lr", 0.01, 0.05)
-        ppo.Settings.c_value = trial.suggest_float("c_value", 0.1, 0.5)
-        ppo.Settings.c_entropy = trial.suggest_float("c_entropy", 0.01, 0.05)
+    ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
+    ppo.Settings.lr_value = trial.suggest_float("lr_v", 1.0e-6, 1.0, log=True)
+    ppo.Settings.c_entropy = trial.suggest_float(
+        "c_entropy", 0.001, 1.0, log=True)
+    ppo.Settings.c_value = trial.suggest_float(
+        "c_value", 0.001, 1.0, log=True)
+    ppo.Settings.split_pi_and_v_nets = trial.suggest_categorical("split_pi_and_vi_nets", [False, True])
+    if ppo.Settings.split_pi_and_v_nets:
+        ppo.Settings.c_value = 0.0
+    ppo.Settings.write_videos = False
 
     def env_fn(): return gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
@@ -121,14 +121,16 @@ def ppo_objective(trial):
 
 def tune():
     study = optuna.create_study(
+        study_name="atari",
         direction="maximize",
-        pruner=optuna.pruners.HyperbandPruner())
+        pruner=optuna.pruners.HyperbandPruner(),
+        storage="sqlite:///optuna.sqlite3")
     study.optimize(ppo_objective, n_trials=100)
     print(study.best_trial)
 
 
 def main():
-    if False:
+    if True:
         tune()
         return
 

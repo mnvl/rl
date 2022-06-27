@@ -20,6 +20,8 @@ from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 class Settings:
     lr = 0.001
+    lr_value = 0.01
+
     gamma = 0.99
 
     horizon = 256
@@ -187,7 +189,7 @@ class PPO(BasicAlgorithm):
         if Settings.split_pi_and_v_nets:
             self.net_v = copy.deepcopy(net).to(self.device)
             self.optimizer_v = optim.Adam(
-                self.net_v.parameters(), lr=Settings.lr, weight_decay=0.0)
+                self.net_v.parameters(), lr=Settings.lr_value, weight_decay=0.0)
             assert Settings.c_value == 0.0
 
         self.step = first_step
