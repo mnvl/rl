@@ -88,6 +88,8 @@ def ppo_objective(trial):
     if ppo.Settings.split_pi_and_v_nets:
         ppo.Settings.c_value = 0.0
     ppo.Settings.write_videos = False
+    ppo.Settings.horizon = 128
+    ppo.Settings.sample_frames = 32
     ppo.Settings.num_actors = 100
 
     def env_fn(): return gym.make(args.env, full_action_space=False)
@@ -132,7 +134,7 @@ def tune():
 
 
 def main():
-    if True:
+    if False:
         tune()
         return
 
@@ -145,13 +147,13 @@ def main():
         net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
-        ppo.Settings.lr = args.lr
+        ppo.Settings.lr = 0.003
         ppo.Settings.horizon = 128
         ppo.Settings.sample_frames = 32
         ppo.Settings.num_actors = 100
-        ppo.Settings.c_value = 0.0
-        ppo.Settings.c_entropy = 0.025
-        ppo.Settings.split_pi_and_v_nets = True
+        ppo.Settings.c_value = 0.0238
+        ppo.Settings.c_entropy = 0.0282
+        ppo.Settings.split_pi_and_v_nets = False
         trainer = ppo.PPO(env_fn, net, device="cuda",
                           prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
