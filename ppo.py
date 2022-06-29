@@ -38,118 +38,91 @@ class Settings:
 
 
 class Worker:
-    def __init__(self, index, env_fn, prepare_fn):
+    def __init__(self, index, env_fn, prepare_fn, device, net):
         self.parent_conn, self.child_conn = mp.Pipe()
         self.process = mp.Process(target=self.run, args=(
-            index, self.child_conn, env_fn, prepare_fn))
+            index, self.child_conn, env_fn, prepare_fn, device, net))
         self.process.start()
 
-    def read_status(self):
-        status = self.parent_conn.recv()
-        return status
+    def read_frames(self):
+        frames = self.parent_conn.recv()
+        return frames
 
-    def send_action(self, action):
-        self.parent_conn.send(int(action))
+    def send_state_dict(self, state_dict):
+        self.parent_conn.send(state_dict)
 
     def stop(self):
         self.send_action(-1)
         self.process.join()
 
-    def run(self, index, child_conn, env_fn, prepare_fn):
+    def run(self, index, child_conn, env_fn, prepare_fn, device, net):
         env = env_fn()
         prepare = prepare_fn()
+        net = copy.deepcopy(net).to(device)
 
-        observation = prepare(env.reset())
-        reward = 0.0
-        done = False
-        child_conn.send((observation, reward, done))
-
-        episode = 0
-        frames = []
+        done = True
 
         while True:
-            action = child_conn.recv()
-            if action == -1:
+            state_dict = child_conn.recv()
+
+            if state_dict is None:
                 return
 
-            observation, reward, done, _ = env.step(action)
-            observation = prepare(observation)
-            child_conn.send((observation, reward, done))
+            net.load_state_dict(state_dict)
 
-            if index == 0 and episode % 100 == 0 and Settings.write_videos:
-                image = env.render(mode="rgb_array")
-                image = np.expand_dims(image, axis=0)
-                frames.append(image)
+            frames = []
 
+            for i in range(Settings.horizon):
                 if done:
-                    frames = np.concatenate(frames, axis=0)
-                    frames = (frames * 255).astype(np.uint8)
-                    skvideo.io.vwrite("episode_%06d.avi" % episode, frames)
-                    frames = []
+                    observation = prepare(env.reset())
 
-            if done:
-                observation = prepare(env.reset())
-                reward = 0.0
-                done = False
-                episode += 1
+                s = np.expand_dims(observation, 0)
+                with torch.no_grad():
+                    scores, V = net(torch.tensor(s, device=device))
+                probs = torch.softmax(scores, axis=1)
+                distr = D.Categorical(probs=probs[0])
+                action = distr.sample()
+
+                new_observation, reward, done, _ = env.step(action)
+                frames.append((observation, action.cpu(), np.array(probs[0].cpu()), float(V[0].cpu()), reward, done))
+
+                observation = prepare(new_observation)
+
+            child_conn.send(frames)
 
 
-class Actors:
+class Sampler:
     def __init__(self, env_fn, prepare_fn, device, net):
-        BasicActor.__init__(self)
-
-        self.workers = [Worker(j, env_fn, prepare_fn)
+        self.workers = [Worker(j, env_fn, prepare_fn, device, net)
                         for j in range(Settings.num_actors)]
-        self.device = device
-        self.net = net
 
-        self.observations = []
-        for j in range(Settings.num_actors):
-            observation, reward, done = self.workers[j].read_status()
-            self.observations.append(observation)
+        self.net = net
+        self.device = device
 
         self.frames_seen = 0
         self.episodes_seen = 0
         self.last_episode_rewards = [0.0 for j in range(Settings.num_actors)]
         self.episode_rewards = [0.0 for j in range(Settings.num_actors)]
 
-    def select_actions(self):
-        s = [np.expand_dims(observation, 0)
-             for observation in self.observations]
-        s = np.concatenate(s, axis=0)
-        with torch.no_grad():
-            scores, V = self.net(torch.tensor(s, device=self.device))
-        probs = torch.softmax(scores, axis=1)
-        distr = D.Categorical(probs=probs)
-        actions = distr.sample()
-        return actions.cpu(), probs.cpu(), V.cpu()
-
     def sample_frames(self, render=False):
-        frames = [[]for j in range(Settings.num_actors)]
+        frames = []
 
-        for i in range(Settings.horizon):
-            actions, probs, values = self.select_actions()
+        state_dict = self.net.state_dict()
 
-            for j in range(Settings.num_actors):
-                self.workers[j].send_action(actions[j])
+        for j in range(Settings.num_actors):
+            self.workers[j].send_state_dict(state_dict)
 
-            for j in range(Settings.num_actors):
-                new_observation, reward, done = self.workers[j].read_status()
-                self.frames_seen += 1
+        observations = []
+        for j in range(Settings.num_actors):
+            fr = self.workers[j].read_frames()
 
-                frames[j].append(
-                    (self.observations[j], actions[j], probs[j], values[j], reward, done))
-                self.observations[j] = new_observation
+            frames.append(fr)
+            observations.append(fr[-1][0])
 
-                self.episode_rewards[j] += reward
-
-                if done:
-                    self.last_episode_rewards[j] = self.episode_rewards[j]
-                    self.episode_rewards[j] = 0
-                    self.episodes_seen += 1
+            self.frames_seen += len(fr)
 
         s = [np.expand_dims(observation, 0)
-             for observation in self.observations]
+             for observation in observations]
         s = np.concatenate(s, axis=0)
         with torch.no_grad():
             _, V = self.net(torch.tensor(s, device=self.device))
@@ -170,7 +143,6 @@ class Actors:
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
 
-
         return updated_frames
 
     def stop(self):
@@ -185,7 +157,7 @@ class PPO(BasicAlgorithm):
         self.device = torch.device(device)
         self.net = net.to(self.device)
 
-        self.actors = Actors(env_fn, prepare_fn, self.device, self.net)
+        self.sampler = Sampler(env_fn, prepare_fn, self.device, self.net)
 
         self.optimizer = optim.Adam(
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
@@ -239,7 +211,8 @@ class PPO(BasicAlgorithm):
         self.optimizer.step()
 
         self.writer.add_histogram("pi", pi.reshape(-1), self.step)
-        self.writer.add_histogram("value/values", values.reshape(-1), self.step)
+        self.writer.add_histogram(
+            "value/values", values.reshape(-1), self.step)
         self.writer.add_histogram("value/V", V.reshape(-1), self.step)
         self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
         self.writer.add_histogram("pi/rate", rate.reshape(-1), self.step)
@@ -248,12 +221,16 @@ class PPO(BasicAlgorithm):
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss, self.step)
-        self.writer.add_scalar("value/values_mean", values.reshape(-1).mean(), self.step)
-        self.writer.add_scalar("value/values_std", values.reshape(-1).std(), self.step)
+        self.writer.add_scalar("value/values_mean",
+                               values.reshape(-1).mean(), self.step)
+        self.writer.add_scalar(
+            "value/values_std", values.reshape(-1).std(), self.step)
         self.writer.add_scalar("value/V_mean", V.reshape(-1).mean(), self.step)
         self.writer.add_scalar("value/V_std", V.reshape(-1).std(), self.step)
-        self.writer.add_scalar("value/adv_mean", adv.reshape(-1).mean(), self.step)
-        self.writer.add_scalar("value/adv_std", adv.reshape(-1).std(), self.step)
+        self.writer.add_scalar(
+            "value/adv_mean", adv.reshape(-1).mean(), self.step)
+        self.writer.add_scalar(
+            "value/adv_std", adv.reshape(-1).std(), self.step)
 
         return self.last_episode_rewards, float(loss)
 
@@ -265,10 +242,10 @@ class PPO(BasicAlgorithm):
             g['lr'] = Settings.lr * self.alpha
 
         t1 = time.time()
-        frames = self.actors.sample_frames(render)
-        self.frames_seen = self.actors.frames_seen
-        self.episodes_seen = self.actors.episodes_seen
-        self.last_episode_rewards = np.mean(self.actors.last_episode_rewards)
+        frames = self.sampler.sample_frames(render)
+        self.frames_seen = self.sampler.frames_seen
+        self.episodes_seen = self.sampler.episodes_seen
+        self.last_episode_rewards = np.mean(self.sampler.last_episode_rewards)
 
         t2 = time.time()
         rewards, loss = self.optimize(frames)
@@ -287,11 +264,7 @@ class PPO(BasicAlgorithm):
         return rewards, loss
 
     def stop(self):
-        self.actors.stop()
-
-    def write_video(self, episode=None, filename=None):
-        #self.actors.write_video(episode, filename)
-        pass
+        self.sampler.stop()
 
 
 class TestPPO(unittest.TestCase):
@@ -397,8 +370,6 @@ class TestPPO(unittest.TestCase):
                       trainer.episodes_seen, rewards, loss)
 
         trainer.stop()
-
-        trainer.write_video(filename="test_cartpole.mp4")
 
         self.assertGreater(rewards, 400)
 
