@@ -20,16 +20,14 @@ from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 class Settings:
     lr = 0.001
-    lr_value = 0.01
 
     gamma = 0.99
 
     horizon = 256
-    sample_frames = 128
     num_actors = 8
 
     epsilon = 0.2
-    c_value = 0.0
+    c_value = 1.0
     c_entropy = 0.01
 
     alpha_0 = 1.0
@@ -37,7 +35,6 @@ class Settings:
     alpha_steps = 100000
 
     write_videos = True
-    split_pi_and_v_nets = True
 
 
 class Worker:
@@ -110,13 +107,12 @@ class Actors:
         for j in range(Settings.num_actors):
             observation, reward, done = self.workers[j].read_status()
             self.observations.append(observation)
+        self.frames = [[]for j in range(Settings.num_actors)]
 
-        self.frames_seen = 0.0
+        self.frames_seen = 0
         self.episodes_seen = 0
         self.last_episode_rewards = [0.0 for j in range(Settings.num_actors)]
         self.episode_rewards = [0.0 for j in range(Settings.num_actors)]
-
-        self.frames = [[]for j in range(Settings.num_actors)]
 
     def select_actions(self):
         s = [np.expand_dims(observation, 0)
@@ -127,11 +123,11 @@ class Actors:
         probs = torch.softmax(scores, axis=1)
         distr = D.Categorical(probs=probs)
         actions = distr.sample()
-        return actions.cpu(), probs.cpu()
+        return actions.cpu(), probs.cpu(), V.cpu()
 
     def sample_frames(self, render=False):
-        while len(self.frames[0]) < Settings.horizon:
-            actions, probs = self.select_actions()
+        while len(self.frames[0]) < Settings.horizon + 1:
+            actions, probs, values = self.select_actions()
 
             for j in range(Settings.num_actors):
                 self.workers[j].send_action(actions[j])
@@ -141,7 +137,7 @@ class Actors:
                 self.frames_seen += 1
 
                 self.frames[j].append(
-                    (self.observations[j], actions[j], probs[j], reward, done))
+                    (self.observations[j], actions[j], probs[j], values[j], reward, done))
                 self.observations[j] = new_observation
 
                 self.episode_rewards[j] += reward
@@ -151,23 +147,27 @@ class Actors:
                     self.episode_rewards[j] = 0
                     self.episodes_seen += 1
 
-        frames = []
-
+        updated_frames = []
         for j in range(Settings.num_actors):
-            discounted_reward = 0.0
+            assert len(self.frames[j]) == Settings.horizon + 1
+            _, _, _, value, _, _ = self.frames[j][Settings.horizon]
+            updated_value = value
+
             for i in range(Settings.horizon-1, -1, -1):
-                observation, action, prob, reward, done = self.frames[j][i]
+                observation, action, prob, value, reward, done = self.frames[j][i]
+
                 if done:
-                    discounted_reward = 0.0
-                discounted_reward = Settings.gamma * discounted_reward + reward
+                    updated_value = reward
+                else:
+                    updated_value = updated_value * Settings.gamma + reward
 
-                if i < Settings.sample_frames:
-                    frames.append((observation, action, prob,
-                                  discounted_reward, done))
+                updated_frames.append((observation, action, prob,
+                                       updated_value, done))
 
-            self.frames[j] = self.frames[j][Settings.sample_frames:]
+            self.frames[j] = self.frames[j][Settings.horizon:]
+            assert len(self.frames[j]) == 1
 
-        return frames
+        return updated_frames
 
     def stop(self):
         for w in self.workers:
@@ -185,12 +185,6 @@ class PPO(BasicAlgorithm):
 
         self.optimizer = optim.Adam(
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
-
-        if Settings.split_pi_and_v_nets:
-            self.net_v = copy.deepcopy(net).to(self.device)
-            self.optimizer_v = optim.Adam(
-                self.net_v.parameters(), lr=Settings.lr_value, weight_decay=0.0)
-            assert Settings.c_value == 0.0
 
         self.step = first_step
 
@@ -213,21 +207,9 @@ class PPO(BasicAlgorithm):
 
         N = observations.shape[0]
 
-        if Settings.split_pi_and_v_nets:
-            self.optimizer_v.zero_grad()
-            _, V = self.net_v(observations)
-            loss_value = torch.mean(torch.square(rewards - V))
-            loss_value.backward()
-            self.optimizer_v.step()
-
         self.optimizer.zero_grad()
 
-        if Settings.split_pi_and_v_nets:
-            scores, _ = self.net(observations)
-            loss_value = float(loss_value)
-        else:
-            scores, V = self.net(observations)
-            loss_value = torch.mean(torch.square(rewards - V))
+        scores, V = self.net(observations)
 
         pi = torch.softmax(scores, axis=1)
 
@@ -240,6 +222,8 @@ class PPO(BasicAlgorithm):
         loss_clip = torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores, axis=1)
+
+        loss_value = torch.mean(torch.square(rewards - V))
 
         loss_entropy = -torch.mean(pi * log_pi)
 
@@ -304,12 +288,14 @@ class TestPPO(unittest.TestCase):
         self.save = (
             Settings.lr,
             Settings.gamma,
-            Settings.sample_frames)
+            Settings.write_videos)
+
+        Settings.write_videos = False
 
     def tearDown(self):
         (Settings.lr,
          Settings.gamma,
-         Settings.sample_frames) = self.save
+         Settings.write_videos) = self.save
 
     def test_select_action(self):
         class Net(nn.Module):
@@ -368,6 +354,7 @@ class TestPPO(unittest.TestCase):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
         Settings.lr = 0.01
+        Settings.c_value = 0.001
 
         def env(): return gym.make("CartPole-v1")
 

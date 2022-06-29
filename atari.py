@@ -147,13 +147,14 @@ def main():
         net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
-        ppo.Settings.lr = 0.003
+        ppo.Settings.lr = 0.005
+        ppo.Settings.lr_value = 0.005
         ppo.Settings.horizon = 128
         ppo.Settings.sample_frames = 32
         ppo.Settings.num_actors = 100
-        ppo.Settings.c_value = 0.0238
-        ppo.Settings.c_entropy = 0.0282
-        ppo.Settings.split_pi_and_v_nets = False
+        ppo.Settings.c_value = 0.0
+        ppo.Settings.c_entropy = 0.02
+        ppo.Settings.split_pi_and_v_nets = True
         trainer = ppo.PPO(env_fn, net, device="cuda",
                           prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
