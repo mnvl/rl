@@ -1,0 +1,5 @@
+# sudo apt install libopenmpi-dev
+
+mpi4py
+imageio
+imageio-ffmpeg
