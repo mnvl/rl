@@ -1,37 +1,5 @@
 
 import numpy as np
-import skvideo.io
-from torch.utils.tensorboard import SummaryWriter
-
-
-class BasicActor:
-    def __init__(self):
-        self.rendered_frames = []
-
-    def render_frame(self):
-        image = self.env.render(mode="rgb_array")
-        image = image.copy()
-        image = np.expand_dims(image, axis=0)
-        self.rendered_frames.append(image)
-
-    def write_video(self, episode=None, filename=None):
-        if episode is not None:
-            filename = "episode_%06d.mp4" % episode
-
-        images = np.concatenate(self.rendered_frames, axis=0)
-        images = (images * 255).astype(np.uint8)
-
-        skvideo.io.vwrite(filename, images)
-
-        print("wrote %s from %s" % (filename, str(images.shape)))
-
-        self.rendered_frames = []
-
-
-class BasicAlgorithm:
-    def __init__(self):
-        self.writer = SummaryWriter()
-
 
 class MarsRoverEnv:
     class action_space:

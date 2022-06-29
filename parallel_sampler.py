@@ -8,6 +8,15 @@ import imageio.v2 as iio
 
 import unittest
 
+from basic import MarsRoverEnv
+
+
+def create_env(env_name):
+    if env_name == "MarsRover":
+        return MarsRoverEnv()
+
+    return gym.make(env_name)
+
 
 class Worker:
     def __init__(self):
@@ -16,7 +25,7 @@ class Worker:
         self.size = self.comm.Get_size()
 
         self.env_name = sys.argv[1]
-        self.env = gym.make(self.env_name)
+        self.env = create_env(self.env_name)
         self.clip = None
 
         os.environ["SDL_VIDEODRIVER"] = "dummy"
@@ -43,6 +52,9 @@ class Worker:
             elif command == "stop_render":
                 self.clip.close()
                 self.clip = None
+            else:
+                print("INVALID COMMAND", command)
+                return
 
     def render(self):
         if self.clip:
@@ -77,6 +89,8 @@ class Wrapper:
 
 class ParallelSampler:
     def __init__(self, env_name, num_workers):
+        MPI.INFO_ENV.Set("hostfile", "hostfile")
+
         self.comm = MPI.COMM_SELF.Spawn(
             sys.executable,
             args=['./parallel_sampler.py', env_name],
