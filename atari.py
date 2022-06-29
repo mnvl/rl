@@ -34,6 +34,7 @@ class AtariNet(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, 3, stride=1)
         self.linear1 = nn.Linear(3072, 512)
+        self.linear2 = nn.Linear(3072, 512)
         self.fc1 = nn.Linear(512, env.action_space.n)
         self.fc2 = nn.Linear(512, 1)
 
@@ -42,12 +43,9 @@ class AtariNet(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = x.reshape((x.shape[0], -1))
-        x = F.relu(self.linear1(x))
-
-        if args.algo == "ppo":
-            return self.fc1(x), self.fc2(x)
-
-        return self.fc1(x)
+        x1 = F.relu(self.linear1(x))
+        x2 = F.relu(self.linear2(x))
+        return self.fc1(x1), self.fc2(x2)
 
 
 class AtariPre:
@@ -147,13 +145,11 @@ def main():
         net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
-        ppo.Settings.lr = 0.005
-        ppo.Settings.lr_value = 0.005
+        ppo.Settings.lr = 0.001
         ppo.Settings.horizon = 128
-        ppo.Settings.sample_frames = 32
-        ppo.Settings.num_actors = 100
-        ppo.Settings.c_value = 0.0
-        ppo.Settings.c_entropy = 0.02
+        ppo.Settings.num_actors = 16
+        ppo.Settings.c_value = 0.01
+        ppo.Settings.c_entropy = 0.01
         ppo.Settings.split_pi_and_v_nets = True
         trainer = ppo.PPO(env_fn, net, device="cuda",
                           prepare_fn=pre_fn, first_step=args.load_step)

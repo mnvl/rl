@@ -150,8 +150,8 @@ class Actors:
         updated_frames = []
         for j in range(Settings.num_actors):
             assert len(self.frames[j]) == Settings.horizon + 1
-            _, _, _, value, _, _ = self.frames[j][Settings.horizon]
-            updated_value = value
+            _, _, _, value, reward, done.frames[j][Settings.horizon]
+            updated_value = reward if done else value
 
             for i in range(Settings.horizon-1, -1, -1):
                 observation, action, prob, value, reward, done = self.frames[j][i]
@@ -190,19 +190,19 @@ class PPO(BasicAlgorithm):
 
     def optimize(self, frames):
         observations = []
-        rewards = []
+        values = []
         actions = []
         pi_old = []
 
         for observation, action, pi, reward, done in frames:
             observations.append(torch.Tensor(np.expand_dims(observation, 0)))
             actions.append(action)
-            rewards.append(reward)
+            values.append(reward)
             pi_old.append(torch.Tensor(np.expand_dims(pi, 0)))
 
         observations = torch.cat(observations, axis=0).to(self.device)
         actions = torch.LongTensor(actions).to(self.device)
-        rewards = torch.Tensor(rewards).to(self.device)
+        values = torch.Tensor(values).to(self.device)
         pi_old = torch.cat(pi_old, axis=0).to(self.device)
 
         N = observations.shape[0]
@@ -217,13 +217,13 @@ class PPO(BasicAlgorithm):
         clipped_rate = torch.clip(
             rate, 1.0 - Settings.epsilon * self.alpha, 1.0 + Settings.epsilon * self.alpha)
 
-        adv = rewards - V.detach()
+        adv = values - V.detach()
 
         loss_clip = torch.mean(torch.min(rate * adv, clipped_rate * adv))
 
         log_pi = torch.log_softmax(scores, axis=1)
 
-        loss_value = torch.mean(torch.square(rewards - V))
+        loss_value = torch.mean(torch.square(values - V))
 
         loss_entropy = -torch.mean(pi * log_pi)
 
@@ -235,6 +235,8 @@ class PPO(BasicAlgorithm):
         self.optimizer.step()
 
         self.writer.add_histogram("pi", pi.reshape(-1), self.step)
+        self.writer.add_histogram("values", values.reshape(-1), self.step)
+        self.writer.add_histogram("V", V.reshape(-1), self.step)
         self.writer.add_histogram("adv", adv.reshape(-1), self.step)
         self.writer.add_histogram("rate", rate.reshape(-1), self.step)
 
