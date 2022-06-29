@@ -238,12 +238,18 @@ class PPO(BasicAlgorithm):
         self.writer.add_histogram("value/values", values.reshape(-1), self.step)
         self.writer.add_histogram("value/V", V.reshape(-1), self.step)
         self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
-        self.writer.add_histogram("rate", rate.reshape(-1), self.step)
+        self.writer.add_histogram("pi/rate", rate.reshape(-1), self.step)
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss, self.step)
+        self.writer.add_scalar("value/values_mean", values.reshape(-1).mean(), self.step)
+        self.writer.add_scalar("value/values_std", values.reshape(-1).std(), self.step)
+        self.writer.add_scalar("value/V_mean", V.reshape(-1).mean(), self.step)
+        self.writer.add_scalar("value/V_std", V.reshape(-1).std(), self.step)
+        self.writer.add_scalar("value/adv_mean", adv.reshape(-1).mean(), self.step)
+        self.writer.add_scalar("value/adv_std", adv.reshape(-1).std(), self.step)
 
         return self.last_episode_rewards, float(loss)
 
@@ -259,7 +265,6 @@ class PPO(BasicAlgorithm):
         self.frames_seen = self.actors.frames_seen
         self.episodes_seen = self.actors.episodes_seen
         self.last_episode_rewards = np.mean(self.actors.last_episode_rewards)
-        self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         t2 = time.time()
         rewards, loss = self.optimize(frames)
@@ -269,8 +274,8 @@ class PPO(BasicAlgorithm):
         t_sample = t2 - t1
         t_optimize = t3 - t2
 
-        self.writer.add_scalar("t_sample", t_sample, self.step)
-        self.writer.add_scalar("t_optimize", t_optimize, self.step)
+        self.writer.add_scalar("time/sample", t_sample, self.step)
+        self.writer.add_scalar("time/optimize", t_optimize, self.step)
         self.writer.add_scalar("rewards", self.last_episode_rewards, self.step)
 
         self.step += 1
