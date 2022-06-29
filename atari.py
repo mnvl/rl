@@ -145,7 +145,7 @@ def main():
         net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
-        ppo.Settings.lr = 0.001
+        ppo.Settings.lr = 0.00025
         ppo.Settings.horizon = 128
         ppo.Settings.num_actors = 16
         ppo.Settings.c_value = 1.0
