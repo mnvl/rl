@@ -150,7 +150,7 @@ class Actors:
         updated_frames = []
         for j in range(Settings.num_actors):
             assert len(self.frames[j]) == Settings.horizon + 1
-            _, _, _, value, reward, done.frames[j][Settings.horizon]
+            _, _, _, value, reward, done = self.frames[j][Settings.horizon]
             updated_value = reward if done else value
 
             for i in range(Settings.horizon-1, -1, -1):
@@ -235,9 +235,9 @@ class PPO(BasicAlgorithm):
         self.optimizer.step()
 
         self.writer.add_histogram("pi", pi.reshape(-1), self.step)
-        self.writer.add_histogram("values", values.reshape(-1), self.step)
-        self.writer.add_histogram("V", V.reshape(-1), self.step)
-        self.writer.add_histogram("adv", adv.reshape(-1), self.step)
+        self.writer.add_histogram("value/values", values.reshape(-1), self.step)
+        self.writer.add_histogram("value/V", V.reshape(-1), self.step)
+        self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
         self.writer.add_histogram("rate", rate.reshape(-1), self.step)
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
