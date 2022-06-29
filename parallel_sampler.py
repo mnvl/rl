@@ -1,6 +1,7 @@
 
 import os
 import sys
+import pickle
 
 import gym
 from mpi4py import MPI
@@ -66,20 +67,23 @@ class Wrapper:
         self.comm = comm
         self.index = index
 
+    def send(self, message):
+        self.comm.send(message, dest=self.index, tag=1)
+
     def send_reset(self):
-        self.comm.send(("reset", None), dest=self.index, tag=1)
+        self.send(("reset", None))
 
     def send_step(self, action):
-        self.comm.send(("step", action), dest=self.index, tag=1)
+        self.send(("step", action))
 
     def send_quit(self):
-        self.comm.send(("quit", None), dest=self.index, tag=1)
+        self.send(("quit", None))
 
     def send_start_render(self, filename):
-        self.comm.send(("start_render", filename), dest=self.index, tag=1)
+        self.send(("start_render", filename))
 
     def send_stop_render(self):
-        self.comm.send(("stop_render", None), dest=self.index, tag=1)
+        self.send(("stop_render", None))
 
     def receive(self):
         new_observation, reward, done = self.comm.recv(
