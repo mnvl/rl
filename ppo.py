@@ -107,7 +107,6 @@ class Actors:
         for j in range(Settings.num_actors):
             observation, reward, done = self.workers[j].read_status()
             self.observations.append(observation)
-        self.frames = [[]for j in range(Settings.num_actors)]
 
         self.frames_seen = 0
         self.episodes_seen = 0
@@ -126,7 +125,9 @@ class Actors:
         return actions.cpu(), probs.cpu(), V.cpu()
 
     def sample_frames(self, render=False):
-        while len(self.frames[0]) < Settings.horizon + 1:
+        frames = [[]for j in range(Settings.num_actors)]
+
+        for i in range(Settings.horizon):
             actions, probs, values = self.select_actions()
 
             for j in range(Settings.num_actors):
@@ -136,7 +137,7 @@ class Actors:
                 new_observation, reward, done = self.workers[j].read_status()
                 self.frames_seen += 1
 
-                self.frames[j].append(
+                frames[j].append(
                     (self.observations[j], actions[j], probs[j], values[j], reward, done))
                 self.observations[j] = new_observation
 
@@ -147,14 +148,19 @@ class Actors:
                     self.episode_rewards[j] = 0
                     self.episodes_seen += 1
 
+        s = [np.expand_dims(observation, 0)
+             for observation in self.observations]
+        s = np.concatenate(s, axis=0)
+        with torch.no_grad():
+            _, V = self.net(torch.tensor(s, device=self.device))
+        V = V.cpu()
+
         updated_frames = []
         for j in range(Settings.num_actors):
-            assert len(self.frames[j]) == Settings.horizon + 1
-            _, _, _, value, reward, done = self.frames[j][Settings.horizon]
-            updated_value = reward if done else value
+            updated_value = V[j]
 
-            for i in range(Settings.horizon-1, -1, -1):
-                observation, action, prob, value, reward, done = self.frames[j][i]
+            for frame in reversed(frames[j]):
+                observation, action, prob, value, reward, done = frame
 
                 if done:
                     updated_value = reward
@@ -164,8 +170,6 @@ class Actors:
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
 
-            self.frames[j] = self.frames[j][Settings.horizon:]
-            assert len(self.frames[j]) == 1
 
         return updated_frames
 
