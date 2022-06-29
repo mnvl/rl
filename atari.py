@@ -148,7 +148,7 @@ def main():
         ppo.Settings.lr = 0.001
         ppo.Settings.horizon = 128
         ppo.Settings.num_actors = 16
-        ppo.Settings.c_value = 0.1
+        ppo.Settings.c_value = 1.0
         ppo.Settings.c_entropy = 0.01
         trainer = ppo.PPO(env_fn, net, device="cuda",
                           prepare_fn=pre_fn, first_step=args.load_step)
