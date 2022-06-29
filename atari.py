@@ -76,19 +76,14 @@ class AtariPre:
 
 
 def ppo_objective(trial):
+    ppo.Settings.horizon = 32
+    ppo.Settings.num_actors = 100
     ppo.Settings.lr = trial.suggest_float("lr", 1.0e-6, 1.0, log=True)
-    ppo.Settings.lr_value = trial.suggest_float("lr_v", 1.0e-6, 1.0, log=True)
     ppo.Settings.c_entropy = trial.suggest_float(
         "c_entropy", 0.001, 1.0, log=True)
     ppo.Settings.c_value = trial.suggest_float(
         "c_value", 0.001, 1.0, log=True)
-    ppo.Settings.split_pi_and_v_nets = trial.suggest_categorical("split_pi_and_vi_nets", [False, True])
-    if ppo.Settings.split_pi_and_v_nets:
-        ppo.Settings.c_value = 0.0
     ppo.Settings.write_videos = False
-    ppo.Settings.horizon = 128
-    ppo.Settings.sample_frames = 32
-    ppo.Settings.num_actors = 100
 
     def env_fn(): return gym.make(args.env, full_action_space=False)
     net = AtariNet(env_fn())
@@ -132,7 +127,7 @@ def tune():
 
 
 def main():
-    if False:
+    if True:
         tune()
         return
 
@@ -146,8 +141,8 @@ def main():
 
     if args.algo == "ppo":
         ppo.Settings.lr = 0.00025
-        ppo.Settings.horizon = 128
-        ppo.Settings.num_actors = 16
+        ppo.Settings.horizon = 32
+        ppo.Settings.num_actors = 100
         ppo.Settings.c_value = 1.0
         ppo.Settings.c_entropy = 0.01
         trainer = ppo.PPO(env_fn, net, device="cuda",

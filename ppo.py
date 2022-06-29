@@ -198,10 +198,10 @@ class PPO(BasicAlgorithm):
         actions = []
         pi_old = []
 
-        for observation, action, pi, reward, done in frames:
+        for observation, action, pi, value, done in frames:
             observations.append(torch.Tensor(np.expand_dims(observation, 0)))
             actions.append(action)
-            values.append(reward)
+            values.append(value)
             pi_old.append(torch.Tensor(np.expand_dims(pi, 0)))
 
         observations = torch.cat(observations, axis=0).to(self.device)
