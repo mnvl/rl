@@ -1,121 +1,85 @@
+# set mpi_yield_when_idle = 1 in /etc/openmpi/openmpi-mca-params.conf
+# check with ompi_info --param all all -l 9 | grep mpi_yield_when_idle
+# (it should be set to true)
+
 
 import os
-import sys
+import time
 
 import gym
 from mpi4py import MPI
-import imageio.v2 as iio
 
 import unittest
 
 
+class Settings:
+    environment_name = "CartPole-v1"
+    environments_per_worker = 4
+
+
+def is_root():
+    return MPI.COMM_WORLD.Get_rank() == 0
+
+
+def is_worker():
+    return not is_root()
+
+
+def num_workers():
+    return MPI.COMM_WORLD.Get_size() - 1
+
+
 class Worker:
     def __init__(self):
-        self.comm = MPI.Comm.Get_parent()
-        self.rank = self.comm.Get_rank()
+        self.comm = MPI.COMM_WORLD
         self.size = self.comm.Get_size()
-
-        self.env_name = sys.argv[1]
-        self.env = gym.make(self.env_name)
-        self.clip = None
+        self.rank = self.comm.Get_rank()
 
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        print("worker %d/%d: %s" % (self.rank, self.size, self.env_name))
+        print("sampler %d/%d" % (self.rank, self.size))
 
     def run(self):
+        environments = [gym.make(Settings.environment_name)
+                        for i in range(Settings.environments_per_worker)]
+        observations = [(env.reset(), 0.0, False, None)
+                        for env in environments]
+        actions = [0 for env in environments]
+
         while True:
-            command, args = self.comm.recv(source=0, tag=1)
+            print("send obs")
+            observations = self.comm.gather(observations, root=0)
+            print("sent obs")
 
-            if command == "reset":
-                observation = self.env.reset()
-                self.comm.send((observation, 0.0, False), dest=0, tag=2)
-                self.render()
-            elif command == "step":
-                action = args
-                new_observation, reward, done, _ = self.env.step(action)
-                self.comm.send((new_observation, reward, done), dest=0, tag=2)
-                self.render()
-            elif command == "quit":
-                break
-            elif command == "start_render":
-                self.clip = iio.get_writer(uri=args, fps=60)
-            elif command == "stop_render":
-                self.clip.close()
-                self.clip = None
+            print("read actions")
+            actions = self.comm.scatter(actions, root=0)
+            print("read actions", actions)
 
-    def render(self):
-        if self.clip:
-            self.clip.append_data(self.env.render(mode="rgb_array"))
-
-
-class Wrapper:
-    def __init__(self, comm, index):
-        self.comm = comm
-        self.index = index
-
-    def send_reset(self):
-        self.comm.send(("reset", None), dest=self.index, tag=1)
-
-    def send_step(self, action):
-        self.comm.send(("step", action), dest=self.index, tag=1)
-
-    def send_quit(self):
-        self.comm.send(("quit", None), dest=self.index, tag=1)
-
-    def send_start_render(self, filename):
-        self.comm.send(("start_render", filename), dest=self.index, tag=1)
-
-    def send_stop_render(self):
-        self.comm.send(("stop_render", None), dest=self.index, tag=1)
-
-    def receive(self):
-        new_observation, reward, done = self.comm.recv(
-            source=self.index, tag=2)
-        return new_observation, reward, done
+            for i in range(Settings.environments_per_worker):
+                observations[i] = environments[i].step(actions[i])
 
 
 class ParallelSampler:
-    def __init__(self, env_name, num_workers):
-        self.comm = MPI.COMM_SELF.Spawn(
-            sys.executable,
-            args=['./parallel_sampler.py', env_name],
-            maxprocs=num_workers)
+    def __init__(self):
+        self.comm = MPI.COMM_WORLD
 
-    def env(self, index):
-        return Wrapper(self.comm, index)
+    def receive_observations(self):
+        return self.comm.gather(None, root=0)
+
+    def send_actions(self, actions):
+        self.comm.scatter(actions, root=0)
 
 
 class TestParallelSampler(unittest.TestCase):
     def test_cartpole(self):
-        ps = ParallelSampler("CartPole-v1", 4)
+        if is_worker():
+            return Worker().run()
 
-        for i in range(4):
-            ps.env(i).send_reset()
-
-        for i in range(4):
-            new_observation, _, _ = ps.env(i).receive()
-
-        ps.env(0).send_start_render("test_parallel_sampler.mp4")
+        ps = ParallelSampler()
 
         for j in range(100):
-            for i in range(4):
-                ps.env(i).send_step(j % 2)
+            observations = ps.receive_observations()
+            print(observations)
 
-            for i in range(4):
-                new_observation, reward, done = ps.env(i).receive()
-
-                if done:
-                    print("worker %d / step %d -- done" % (i, j))
-                    ps.env(i).send_reset()
-                    new_observation, _, _ = ps.env(i).receive()
-
-        ps.env(0).send_stop_render()
-
-
-def main():
-    Worker().run()
-
-
-if __name__ == '__main__':
-    main()
+            actions = [[i % 2 for i in range(Settings.environments_per_worker)] for i in range(num_workers())]
+            ps.send_actions(actions)
