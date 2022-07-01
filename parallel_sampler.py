@@ -4,6 +4,7 @@
 
 
 import os
+import sys
 
 import numpy as np
 import gym
@@ -25,12 +26,15 @@ def is_worker():
     return not is_root()
 
 
-def num_processes():
-    return MPI.COMM_WORLD.Get_size()
-
-
 def num_workers():
     return MPI.COMM_WORLD.Get_size() - 1
+
+
+def run_worker():
+    if is_worker():
+        Worker().run()
+        return True
+    return False
 
 
 class Worker:
@@ -68,25 +72,31 @@ class Worker:
 class ParallelSampler:
     def __init__(self):
         self.comm = MPI.COMM_WORLD
-        self.recvbuf = np.empty(100, dtype='i')
-        self.dummy = np.empty(Settings.environments_per_worker, dtype='i')
+
+        self.observation_shape = gym.make(
+            Settings.environment_name).reset().shape
+
+        self.actions = np.zeros(
+            shape=(num_workers()+1, Settings.environments_per_worker), dtype=np.int32)
+        self.dummy = np.empty(Settings.environments_per_worker, dtype=np.int32)
 
     def receive_observations(self):
         return self.comm.gather(None, root=0)
 
     def send_actions(self, actions):
-        return self.comm.Iscatter(actions, self.dummy, root=0)
+        self.actions[1:, :] = actions
+        return self.comm.Iscatter(self.actions, self.dummy, root=0)
 
 
 class TestParallelSampler(unittest.TestCase):
     def test_cartpole(self):
-        if is_worker():
-            return Worker().run()
+        if run_worker():
+            return
 
         ps = ParallelSampler()
 
         actions = np.zeros(
-            shape=(num_processes(), Settings.environments_per_worker), dtype=np.int32)
+            shape=(num_workers(), Settings.environments_per_worker), dtype=np.int32)
 
         for j in range(1000):
             observations = ps.receive_observations()
