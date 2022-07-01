@@ -127,7 +127,7 @@ def tune():
 
 
 def main():
-    if True:
+    if False:
         tune()
         return
 
@@ -140,11 +140,11 @@ def main():
         net.load_state_dict(torch.load("step_%06d" % args.load_step))
 
     if args.algo == "ppo":
-        ppo.Settings.lr = 0.00025
+        ppo.Settings.lr = 0.00068
         ppo.Settings.horizon = 32
         ppo.Settings.num_actors = 100
-        ppo.Settings.c_value = 1.0
-        ppo.Settings.c_entropy = 0.01
+        ppo.Settings.c_value = 0.013
+        ppo.Settings.c_entropy = 0.024
         trainer = ppo.PPO(env_fn, net, device="cuda",
                           prepare_fn=pre_fn, first_step=args.load_step)
     elif args.algo == "dql":
@@ -155,7 +155,6 @@ def main():
         sys.exit(1)
 
     pb = tqdm(range(args.load_step, args.num_steps))
-
     for i in pb:
         magic = (i % 1000 == 0)
 
