@@ -1,5 +1,4 @@
 
-import copy
 import time
 import os
 import unittest
@@ -64,7 +63,9 @@ class Worker:
         done = False
         child_conn.send((observation, reward, done))
 
-        episode = 0
+        num_episodes = 0
+        num_frames = 0
+        last_save_time = 0
         frames = []
 
         while True:
@@ -75,8 +76,9 @@ class Worker:
             observation, reward, done, _ = env.step(action)
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
+            num_frames += 1
 
-            if index == 0 and episode % 100 == 0 and Settings.write_videos:
+            if index == 0 and Settings.write_videos and ((time.time() - last_save_time) > 60*60 or num_episodes % 100 == 0):
                 image = env.render(mode="rgb_array")
                 image = np.expand_dims(image, axis=0)
                 frames.append(image)
@@ -84,14 +86,17 @@ class Worker:
                 if done:
                     frames = np.concatenate(frames, axis=0)
                     frames = (frames * 255).astype(np.uint8)
-                    imageio.mimwrite("episode_%06d.mp4" % episode, frames)
+                    imageio.mimwrite("episode_%06d_step_%09d.mp4" % (
+                        num_episodes, num_frames // Settings.horizon), frames)
+
                     frames = []
+                    last_save_time = time.time()
 
             if done:
                 observation = prepare(env.reset())
                 reward = 0.0
                 done = False
-                episode += 1
+                num_episodes += 1
 
 
 class Actors:
@@ -170,7 +175,6 @@ class Actors:
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
 
-
         return updated_frames
 
     def stop(self):
@@ -239,7 +243,8 @@ class PPO(BasicAlgorithm):
         self.optimizer.step()
 
         self.writer.add_histogram("pi", pi.reshape(-1), self.step)
-        self.writer.add_histogram("value/values", values.reshape(-1), self.step)
+        self.writer.add_histogram(
+            "value/values", values.reshape(-1), self.step)
         self.writer.add_histogram("value/V", V.reshape(-1), self.step)
         self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
         self.writer.add_histogram("pi/rate", rate.reshape(-1), self.step)
@@ -248,12 +253,16 @@ class PPO(BasicAlgorithm):
         self.writer.add_scalar("loss/value", loss_value, self.step)
         self.writer.add_scalar("loss/entropy", loss_entropy, self.step)
         self.writer.add_scalar("loss", loss, self.step)
-        self.writer.add_scalar("value/values_mean", values.reshape(-1).mean(), self.step)
-        self.writer.add_scalar("value/values_std", values.reshape(-1).std(), self.step)
+        self.writer.add_scalar("value/values_mean",
+                               values.reshape(-1).mean(), self.step)
+        self.writer.add_scalar(
+            "value/values_std", values.reshape(-1).std(), self.step)
         self.writer.add_scalar("value/V_mean", V.reshape(-1).mean(), self.step)
         self.writer.add_scalar("value/V_std", V.reshape(-1).std(), self.step)
-        self.writer.add_scalar("value/adv_mean", adv.reshape(-1).mean(), self.step)
-        self.writer.add_scalar("value/adv_std", adv.reshape(-1).std(), self.step)
+        self.writer.add_scalar(
+            "value/adv_mean", adv.reshape(-1).mean(), self.step)
+        self.writer.add_scalar(
+            "value/adv_std", adv.reshape(-1).std(), self.step)
 
         return self.last_episode_rewards, float(loss)
 
