@@ -25,8 +25,8 @@ def is_worker():
     return not is_root()
 
 
-def num_workers():
-    return MPI.COMM_WORLD.Get_size() - 1
+def num_processes():
+    return MPI.COMM_WORLD.Get_size()
 
 
 class Worker:
@@ -37,36 +37,40 @@ class Worker:
 
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-        print("sampler %d/%d" % (self.rank, self.size))
-
     def run(self):
         environments = [gym.make(Settings.environment_name)
                         for i in range(Settings.environments_per_worker)]
-        observations = np.concatenate([np.expand_dims(env.reset(), 0) for env in environments])
-        actions = np.zeros(shape=Settings.environments_per_worker)
+        observations = [env.reset() for env in environments]
+        actions = np.zeros(shape=Settings.environments_per_worker, dtype=np.int32)
+
+        num_frames = 0
 
         while True:
-            print("send obs")
-            observations = self.comm.Gather(observations, None, root=0)
-            print("sent obs")
+            self.comm.gather(observations, root=0)
 
-            print("read actions")
-            actions = self.comm.scatter(actions, root=0)
-            print("read actions", actions)
+            req = self.comm.Iscatter(None, actions, root=0)
+            req.wait()
+
+            if np.all(actions == -1):
+                return
 
             for i in range(Settings.environments_per_worker):
                 observations[i] = environments[i].step(actions[i])
+
+            num_frames += 1
 
 
 class ParallelSampler:
     def __init__(self):
         self.comm = MPI.COMM_WORLD
+        self.recvbuf = np.empty(100, dtype='i')
+        self.dummy = np.empty(Settings.environments_per_worker, dtype='i')
 
     def receive_observations(self):
         return self.comm.gather(None, root=0)
 
     def send_actions(self, actions):
-        self.comm.scatter(actions, root=0)
+        return self.comm.Iscatter(actions, self.dummy, root=0)
 
 
 class TestParallelSampler(unittest.TestCase):
@@ -76,9 +80,14 @@ class TestParallelSampler(unittest.TestCase):
 
         ps = ParallelSampler()
 
+        actions = np.zeros(shape=(num_processes(), Settings.environments_per_worker), dtype=np.int32)
+
         for j in range(100):
             observations = ps.receive_observations()
-            print(observations)
 
-            actions = [[i % 2 for i in range(Settings.environments_per_worker)] for i in range(num_workers())]
-            ps.send_actions(actions)
+            req = ps.send_actions(actions)
+            req.wait()
+
+        actions[:] = -1
+        req = ps.send_actions(actions)
+        req.wait()
