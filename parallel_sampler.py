@@ -4,8 +4,8 @@
 
 
 import os
-import time
 
+import numpy as np
 import gym
 from mpi4py import MPI
 
@@ -42,13 +42,12 @@ class Worker:
     def run(self):
         environments = [gym.make(Settings.environment_name)
                         for i in range(Settings.environments_per_worker)]
-        observations = [(env.reset(), 0.0, False, None)
-                        for env in environments]
-        actions = [0 for env in environments]
+        observations = np.concatenate([np.expand_dims(env.reset(), 0) for env in environments])
+        actions = np.zeros(shape=Settings.environments_per_worker)
 
         while True:
             print("send obs")
-            observations = self.comm.gather(observations, root=0)
+            observations = self.comm.Gather(observations, None, root=0)
             print("sent obs")
 
             print("read actions")
