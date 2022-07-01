@@ -7,7 +7,7 @@ import multiprocessing as mp
 
 import gym
 import numpy as np
-import skvideo.io
+import imageio
 
 import torch
 import torch.nn as nn
@@ -84,7 +84,7 @@ class Worker:
                 if done:
                     frames = np.concatenate(frames, axis=0)
                     frames = (frames * 255).astype(np.uint8)
-                    skvideo.io.vwrite("episode_%06d.avi" % episode, frames)
+                    imageio.mimwrite("episode_%06d.mp4" % episode, frames)
                     frames = []
 
             if done:
