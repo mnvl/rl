@@ -1,8 +1,8 @@
 
-import time
+import timeit
+
 import os
 import unittest
-import multiprocessing as mp
 
 import gym
 import numpy as np
@@ -14,7 +14,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributions as D
 
-from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
+from basic_algorithm import MarsRoverEnv
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Settings:
@@ -37,25 +38,8 @@ class Settings:
 
 
 class Worker:
-    def __init__(self, index, env_fn, prepare_fn):
-        self.parent_conn, self.child_conn = mp.Pipe()
-        self.process = mp.Process(target=self.run, args=(
-            index, self.child_conn, env_fn, prepare_fn))
-        self.process.start()
-
-    def read_status(self):
-        status = self.parent_conn.recv()
-        return status
-
-    def send_action(self, action):
-        self.parent_conn.send(int(action))
-
-    def stop(self):
-        self.send_action(-1)
-        self.process.join()
-
-    def run(self, index, child_conn, env_fn, prepare_fn):
-        env = env_fn()
+    def run(self, index, child_conn, create_env, prepare_fn):
+        env = create_env()
         prepare = prepare_fn()
 
         observation = prepare(env.reset())
@@ -73,12 +57,16 @@ class Worker:
             if action == -1:
                 return
 
+            t1 = timeit.default_timer()
             observation, reward, done, _ = env.step(action)
+            t2 = timeit.default_timer()
+            print("step took:", (t2-t1), "secs.")
+
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
             num_frames += 1
 
-            if index == 0 and Settings.write_videos and ((time.time() - last_save_time) > 60*60 or num_episodes % 100 == 0):
+            if index == 0 and Settings.write_videos and ((timeit.default_timer() - last_save_time) > 60*60 or num_episodes % 100 == 0):
                 image = env.render(mode="rgb_array")
                 image = np.expand_dims(image, axis=0)
                 frames.append(image)
@@ -90,7 +78,7 @@ class Worker:
                         num_episodes, num_frames // Settings.horizon), frames)
 
                     frames = []
-                    last_save_time = time.time()
+                    last_save_time = timeit.default_timer()
 
             if done:
                 observation = prepare(env.reset())
@@ -99,24 +87,24 @@ class Worker:
                 num_episodes += 1
 
 
-class Actors:
-    def __init__(self, env_fn, prepare_fn, device, net):
-        BasicActor.__init__(self)
-
-        self.workers = [Worker(j, env_fn, prepare_fn)
-                        for j in range(Settings.num_actors)]
+class Sampler:
+    def __init__(self, create_env, create_preparator, device, net, writer):
         self.device = device
         self.net = net
 
-        self.observations = []
-        for j in range(Settings.num_actors):
-            observation, reward, done = self.workers[j].read_status()
-            self.observations.append(observation)
+        self.environments = [create_env() for i in range(Settings.num_actors)]
+        self.preparators = [create_preparator()
+                            for i in range(Settings.num_actors)]
+        self.observations = [self.preparators[i](
+            self.environments[i].reset()) for i in range(Settings.num_actors)]
 
+        self.steps_seen = 0
         self.frames_seen = 0
         self.episodes_seen = 0
         self.last_episode_rewards = [0.0 for j in range(Settings.num_actors)]
         self.episode_rewards = [0.0 for j in range(Settings.num_actors)]
+
+        self.writer = writer
 
     def select_actions(self):
         s = [np.expand_dims(observation, 0)
@@ -132,19 +120,22 @@ class Actors:
     def sample_frames(self, render=False):
         frames = [[]for j in range(Settings.num_actors)]
 
+        steps_took = 0.0
+
         for i in range(Settings.horizon):
             actions, probs, values = self.select_actions()
 
             for j in range(Settings.num_actors):
-                self.workers[j].send_action(actions[j])
+                t1 = timeit.default_timer()
+                new_observation, reward, done, _ = self.environments[j].step(
+                    int(actions[j]))
+                steps_took += timeit.default_timer() - t1
 
-            for j in range(Settings.num_actors):
-                new_observation, reward, done = self.workers[j].read_status()
                 self.frames_seen += 1
 
                 frames[j].append(
                     (self.observations[j], actions[j], probs[j], values[j], reward, done))
-                self.observations[j] = new_observation
+                self.observations[j] = self.preparators[j](new_observation)
 
                 self.episode_rewards[j] += reward
 
@@ -152,6 +143,9 @@ class Actors:
                     self.last_episode_rewards[j] = self.episode_rewards[j]
                     self.episode_rewards[j] = 0
                     self.episodes_seen += 1
+
+                    self.observations[j] = self.preparators[j](
+                        self.environments[j].reset())
 
         s = [np.expand_dims(observation, 0)
              for observation in self.observations]
@@ -175,21 +169,20 @@ class Actors:
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
 
+        self.writer.add_scalar("time/step", steps_took, self.steps_seen)
+        self.steps_seen += 1
+
         return updated_frames
 
-    def stop(self):
-        for w in self.workers:
-            w.stop()
 
-
-class PPO(BasicAlgorithm):
-    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda: lambda x: x, first_step=0):
-        BasicAlgorithm.__init__(self)
+class PPO:
+    def __init__(self, create_env, net, device="cpu", prepare_fn=lambda: lambda x: x, first_step=0):
+        self.writer = SummaryWriter()
 
         self.device = torch.device(device)
         self.net = net.to(self.device)
 
-        self.actors = Actors(env_fn, prepare_fn, self.device, self.net)
+        self.sampler = Sampler(create_env, prepare_fn, self.device, self.net, self.writer)
 
         self.optimizer = optim.Adam(
             self.net.parameters(), maximize=True, lr=Settings.lr, weight_decay=0.0)
@@ -273,16 +266,16 @@ class PPO(BasicAlgorithm):
         for g in self.optimizer.param_groups:
             g['lr'] = Settings.lr * self.alpha
 
-        t1 = time.time()
-        frames = self.actors.sample_frames(render)
-        self.frames_seen = self.actors.frames_seen
-        self.episodes_seen = self.actors.episodes_seen
-        self.last_episode_rewards = np.mean(self.actors.last_episode_rewards)
+        t1 = timeit.default_timer()
+        frames = self.sampler.sample_frames(render)
+        self.frames_seen = self.sampler.frames_seen
+        self.episodes_seen = self.sampler.episodes_seen
+        self.last_episode_rewards = np.mean(self.sampler.last_episode_rewards)
 
-        t2 = time.time()
+        t2 = timeit.default_timer()
         rewards, loss = self.optimize(frames)
 
-        t3 = time.time()
+        t3 = timeit.default_timer()
 
         t_sample = t2 - t1
         t_optimize = t3 - t2
@@ -294,13 +287,6 @@ class PPO(BasicAlgorithm):
         self.step += 1
 
         return rewards, loss
-
-    def stop(self):
-        self.actors.stop()
-
-    def write_video(self, episode=None, filename=None):
-        #self.actors.write_video(episode, filename)
-        pass
 
 
 class TestPPO(unittest.TestCase):
@@ -350,13 +336,11 @@ class TestPPO(unittest.TestCase):
 
         trainer = PPO(env, net)
 
-        for i in range(20):
+        for i in range(100):
             rewards, loss = trainer.train()
             if i % 10 == 9:
                 print("mars rover", trainer.frames_seen,
                       trainer.episodes_seen, rewards, loss)
-
-        trainer.stop()
 
         self.assertEqual(rewards, 10.0)
 
@@ -404,10 +388,6 @@ class TestPPO(unittest.TestCase):
             if i % 10 == 0 or magic:
                 print("cart pole", trainer.frames_seen,
                       trainer.episodes_seen, rewards, loss)
-
-        trainer.stop()
-
-        trainer.write_video(filename="test_cartpole.mp4")
 
         self.assertGreater(rewards, 400)
 

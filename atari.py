@@ -162,10 +162,6 @@ def main():
 
         pb.set_description("%8d %6.6f %6.6f" % (i, rewards, loss))
 
-        if magic:
-            trainer.write_video(filename="step_%06d.avi" % i)
-            torch.save(net.state_dict(), "step_%06d" % i)
-
 
 if __name__ == '__main__':
     main()
