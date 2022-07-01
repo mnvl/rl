@@ -29,6 +29,10 @@ def num_processes():
     return MPI.COMM_WORLD.Get_size()
 
 
+def num_workers():
+    return MPI.COMM_WORLD.Get_size() - 1
+
+
 class Worker:
     def __init__(self):
         self.comm = MPI.COMM_WORLD
@@ -41,7 +45,8 @@ class Worker:
         environments = [gym.make(Settings.environment_name)
                         for i in range(Settings.environments_per_worker)]
         observations = [env.reset() for env in environments]
-        actions = np.zeros(shape=Settings.environments_per_worker, dtype=np.int32)
+        actions = np.zeros(
+            shape=Settings.environments_per_worker, dtype=np.int32)
 
         num_frames = 0
 
@@ -80,9 +85,10 @@ class TestParallelSampler(unittest.TestCase):
 
         ps = ParallelSampler()
 
-        actions = np.zeros(shape=(num_processes(), Settings.environments_per_worker), dtype=np.int32)
+        actions = np.zeros(
+            shape=(num_processes(), Settings.environments_per_worker), dtype=np.int32)
 
-        for j in range(100):
+        for j in range(1000):
             observations = ps.receive_observations()
 
             req = ps.send_actions(actions)
