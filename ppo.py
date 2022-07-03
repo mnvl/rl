@@ -26,8 +26,6 @@ class Settings:
 
     gamma = 0.99
 
-    horizon = 256
-
     epsilon = 0.2
     c_value = 1.0
     c_entropy = 0.01
@@ -48,6 +46,7 @@ class EnvironmentWrapper:
         self.prepare = self.prepare_fn()
 
         self.observation = self.prepare(self.env.reset())
+        self.new_observation = self.observation
         self.reward = 0.0
         self.done = False
 
@@ -56,12 +55,15 @@ class EnvironmentWrapper:
         self.frames = []
 
     def get_observation(self):
-        result = (self.observation, self.reward, self.done)
+        result = (self.observation, self.new_observation,
+                  self.reward, self.done)
         return result
 
     def step(self, action):
-        self.observation, self.reward, self.done, _ = self.env.step(action)
-        self.observation = self.prepare(self.observation)
+        self.observation = self.new_observation
+
+        self.new_observation, self.reward, self.done, _ = self.env.step(action)
+        self.new_observation = self.prepare(self.new_observation)
 
         self.num_frames += 1
 
@@ -74,16 +76,11 @@ class EnvironmentWrapper:
                 frames = np.concatenate(frames, axis=0)
                 frames = (frames * 255).astype(np.uint8)
                 filename = "episode_%04d_%06d_step_%09d.mp4" % (
-                    os.getpid(), num_episodes, num_frames // Settings.horizon)
+                    os.getpid(), num_episodes, num_frames)
                 imageio.mimwrite(filename, frames, fps=60)
 
                 frames = []
                 last_save_time = time.time()
-
-        if self.done:
-            self.prepare = self.prepare_fn()
-            self.observation = self.prepare(self.env.reset())
-            self.num_episodes += 1
 
 
 class Worker:
@@ -119,16 +116,17 @@ class Worker:
 
 
 class Sampler:
-    def __init__(self, env_fn, prepare_fn, device, net):
+    def __init__(self, env_fn, prepare_fn, device, pi_net):
         self.workers = [Worker(env_fn, prepare_fn)
                         for j in range(Settings.num_workers)]
         self.device = device
-        self.net = net
+        self.pi_net = pi_net
 
         self.observations = []
         for j in range(Settings.num_workers):
             statuses = self.workers[j].receive_statuses()
-            self.observations.extend([observation for observation, reward, done in statuses])
+            self.observations.extend(
+                [observation for observation, reward, done in statuses])
 
         self.frames_seen = 0
         self.episodes_seen = 0
@@ -140,40 +138,40 @@ class Sampler:
              for observation in self.observations]
         s = np.concatenate(s, axis=0)
         with torch.no_grad():
-            scores, V = self.net(torch.tensor(s, device=self.device))
+            scores, V = self.pi_net(torch.tensor(s, device=self.device))
         probs = torch.softmax(scores, axis=1)
         distr = D.Categorical(probs=probs)
         actions = distr.sample()
         return actions.cpu(), probs.cpu(), V.cpu()
 
     def sample_frames(self, render=False):
-        frames = [[] for j in range(Settings.num_envs)]
+        frames = []
 
-        for i in range(Settings.horizon):
-            actions, probs, values = self.select_actions()
+        actions, probs, values = self.select_actions()
 
-            for j in range(Settings.num_workers):
-                a = [int(action) for action in actions[j:j+Settings.envs_per_worker]]
-                self.workers[j].send_actions(a)
+        for j in range(Settings.num_workers):
+            a = [int(action)
+                 for action in actions[j:j+Settings.envs_per_worker]]
+            self.workers[j].send_actions(a)
 
-            statuses = []
-            for j in range(Settings.num_workers):
-                statuses.extend(self.workers[j].receive_statuses())
+        statuses = []
+        for j in range(Settings.num_workers):
+            statuses.extend(self.workers[j].receive_statuses())
 
-            for j in range(Settings.num_envs):
-                new_observation, reward, done = statuses[j]
-                self.frames_seen += 1
+        for j in range(Settings.num_envs):
+            observation, new_observation, reward, done = statuses[j]
+            self.frames_seen += 1
 
-                frames[j].append(
-                    (self.observations[j], actions[j], probs[j], values[j], reward, done))
-                self.observations[j] = new_observation
+            frames.append(
+                (self.observations[j], actions[j], probs[j], values[j], reward, done))
+            self.observations[j] = new_observation
 
-                self.episode_rewards[j] += reward
+            self.episode_rewards[j] += reward
 
-                if done:
-                    self.last_episode_rewards[j] = self.episode_rewards[j]
-                    self.episode_rewards[j] = 0
-                    self.episodes_seen += 1
+            if done:
+                self.last_episode_rewards[j] = self.episode_rewards[j]
+                self.episode_rewards[j] = 0
+                self.episodes_seen += 1
 
         s = [np.expand_dims(observation, 0)
              for observation in self.observations]
@@ -197,7 +195,6 @@ class Sampler:
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
 
-
         return updated_frames
 
     def stop(self):
@@ -206,11 +203,12 @@ class Sampler:
 
 
 class PPO(BasicAlgorithm):
-    def __init__(self, env_fn, net, device="cpu", prepare_fn=lambda: lambda x: x, first_step=0):
+    def __init__(self, env_fn, pi_net, q_net, device="cpu", prepare_fn=lambda: lambda x: x, first_step=0):
         BasicAlgorithm.__init__(self)
 
         self.device = torch.device(device)
-        self.net = net.to(self.device)
+        self.pi_net = pi_net.to(self.device)
+        self.q_net = q_net.to(self.device)
 
         self.sampler = Sampler(env_fn, prepare_fn, self.device, self.net)
 
