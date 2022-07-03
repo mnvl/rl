@@ -19,7 +19,7 @@ from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 class Settings:
     num_workers = mp.cpu_count()
-    envs_per_worker = 100
+    envs_per_worker = 1
     num_envs = num_workers * envs_per_worker
 
     lr = 0.001
@@ -42,12 +42,12 @@ class Settings:
 class EnvironmentWrapper:
     def __init__(self, index, env_fn, prepare_fn):
         self.index = index
+        self.prepare_fn = prepare_fn
 
         self.env = env_fn()
-        self.prepare = prepare_fn()
+        self.prepare = self.prepare_fn()
 
         self.observation = self.prepare(self.env.reset())
-        self.new_observation = self.observation
         self.reward = 0.0
         self.done = False
 
@@ -57,12 +57,11 @@ class EnvironmentWrapper:
 
     def get_observation(self):
         result = (self.observation, self.reward, self.done)
-        self.observation = self.new_observation
         return result
 
     def step(self, action):
-        self.new_observation, self.reward, self.done, _ = self.env.step(action)
-        self.new_observation = self.prepare(self.new_observation)
+        self.observation, self.reward, self.done, _ = self.env.step(action)
+        self.observation = self.prepare(self.observation)
 
         self.num_frames += 1
 
@@ -82,7 +81,8 @@ class EnvironmentWrapper:
                 last_save_time = time.time()
 
         if self.done:
-            self.new_observation = self.prepare(self.env.reset())
+            self.prepare = self.prepare_fn()
+            self.observation = self.prepare(self.env.reset())
             self.num_episodes += 1
 
 
@@ -111,7 +111,7 @@ class Worker:
         return status
 
     def send_actions(self, actions):
-        self.parent_conn.send([int(action) for action in actions])
+        self.parent_conn.send(actions)
 
     def stop(self):
         self.send_actions(-1)
@@ -147,13 +147,14 @@ class Sampler:
         return actions.cpu(), probs.cpu(), V.cpu()
 
     def sample_frames(self, render=False):
-        frames = [[]for j in range(Settings.num_envs)]
+        frames = [[] for j in range(Settings.num_envs)]
 
         for i in range(Settings.horizon):
             actions, probs, values = self.select_actions()
 
             for j in range(Settings.num_workers):
-                self.workers[j].send_actions(actions[j:j+Settings.envs_per_worker])
+                a = [int(action) for action in actions[j:j+Settings.envs_per_worker]]
+                self.workers[j].send_actions(a)
 
             statuses = []
             for j in range(Settings.num_workers):
@@ -182,7 +183,7 @@ class Sampler:
         V = V.cpu()
 
         updated_frames = []
-        for j in range(Settings.num_workers):
+        for j in range(Settings.num_envs):
             updated_value = V[j]
 
             for frame in reversed(frames[j]):
@@ -195,6 +196,7 @@ class Sampler:
 
                 updated_frames.append((observation, action, prob,
                                        updated_value, done))
+
 
         return updated_frames
 
