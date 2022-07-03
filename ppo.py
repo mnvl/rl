@@ -18,7 +18,7 @@ from basic_algorithm import BasicActor, BasicAlgorithm, MarsRoverEnv
 
 
 class Settings:
-    num_workers = mp.cpu_count()
+    num_workers = 8
     envs_per_worker = 1
     num_envs = num_workers * envs_per_worker
 
@@ -26,7 +26,7 @@ class Settings:
 
     gamma = 0.99
 
-    horizon = 32
+    horizon = 256
 
     epsilon = 0.2
     c_value = 1.0
