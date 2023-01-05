@@ -53,6 +53,9 @@ class AtariPre:
         self.lookback = []
 
     def __call__(self, s):
+        if len(s) == 2:
+            s = s[0]
+
         # Pong
         if False:
             s = s[32:196, :, :]
@@ -131,7 +134,7 @@ def main():
         tune()
         return
 
-    def env_fn(): return gym.make(args.env, full_action_space=False)
+    def env_fn(): return gym.make(args.env, full_action_space=False, render_mode="rgb_array")
     net = AtariNet(env_fn())
     pre_fn = AtariPre
 

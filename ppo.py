@@ -23,7 +23,7 @@ class Settings:
     gamma = 0.99
 
     horizon = 256
-    num_actors = 8
+    num_actors = 16
 
     epsilon = 0.2
     c_value = 1.0
@@ -73,13 +73,13 @@ class Worker:
             if action == -1:
                 return
 
-            observation, reward, done, _ = env.step(action)
+            observation, reward, done, _, _ = env.step(action)
             observation = prepare(observation)
             child_conn.send((observation, reward, done))
             num_frames += 1
 
             if index == 0 and Settings.write_videos and ((time.time() - last_save_time) > 60*60 or num_episodes % 100 == 0):
-                image = env.render(mode="rgb_array")
+                image = env.render()
                 image = np.expand_dims(image, axis=0)
                 frames.append(image)
 
@@ -242,12 +242,12 @@ class PPO(BasicAlgorithm):
         loss.backward()
         self.optimizer.step()
 
-        self.writer.add_histogram("pi", pi.reshape(-1), self.step)
-        self.writer.add_histogram(
-            "value/values", values.reshape(-1), self.step)
-        self.writer.add_histogram("value/V", V.reshape(-1), self.step)
-        self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
-        self.writer.add_histogram("pi/rate", rate.reshape(-1), self.step)
+        #self.writer.add_histogram("pi", pi.reshape(-1), self.step)
+        # self.writer.add_histogram(
+        #     "value/values", values.reshape(-1), self.step)
+        # self.writer.add_histogram("value/V", V.reshape(-1), self.step)
+        # self.writer.add_histogram("value/adv", adv.reshape(-1), self.step)
+        # self.writer.add_histogram("pi/rate", rate.reshape(-1), self.step)
 
         self.writer.add_scalar("loss/clip", loss_clip, self.step)
         self.writer.add_scalar("loss/value", loss_value, self.step)
